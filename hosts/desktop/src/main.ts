@@ -285,6 +285,53 @@ const traceAssistPrompt = (file: string, src: string, name: string, reason: stri
     '```',
   ].join('\n');
 
+const retryPrompt = (file: string, src: string, name: string, prev: string, error: string): string =>
+  [
+    `Your "# fusion:" directive for \`${name}\` in ${file}:`,
+    prev,
+    `FAILED when traced: ${error}`,
+    `Fix the shapes / dtypes / number of args. Reply with ONLY the corrected "# fusion:" line(s).`,
+    '',
+    '```python',
+    src,
+    '```',
+  ].join('\n');
+
+// Trace a CANDIDATE directive against a temp copy (never touches the user's file) to verify
+// it works. Returns an error string if it still fails, or null if it traced clean.
+let _tmpN = 0;
+async function tryDirective(srcLines: string[], line: number, directive: string, name: string): Promise<string | null> {
+  const lines = [...srcLines];
+  const idx = Math.max(0, line - 1);
+  const indent = (lines[idx] || '').match(/^\s*/)?.[0] ?? '';
+  const dir = directive
+    .split('\n')
+    .map((d) => d.trim())
+    .filter(Boolean)
+    .map((d) => indent + d);
+  lines.splice(idx, 0, ...dir);
+  const tmp = path.join(os.tmpdir(), `fusion-try-${process.pid}-${_tmpN++}.py`);
+  fs.writeFileSync(tmp, lines.join('\n'), 'utf8');
+  try {
+    const res = await getHelper().request<{ error?: string | null; records?: Record<string, unknown> }>(
+      'trace_function',
+      { path: tmp, name, line: 0 }, // line 0 -> find by name (the directive shifted the line)
+    );
+    if (res.error) return String(res.error);
+    if (!res.records || Object.keys(res.records).length === 0) return 'traced but captured no shapes';
+    return null;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  } finally {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+// agent <-> tracer loop: propose a directive, TEST it, feed errors back, retry up to 3 rounds.
 async function runTraceAssist(id: string, p: string, name: string, line: number): Promise<void> {
   let reason = '';
   try {
@@ -293,24 +340,48 @@ async function runTraceAssist(id: string, p: string, name: string, line: number)
   } catch {
     /* ignore */
   }
-  const src = openFile && openFile.path === p ? openFile.lines.join('\n') : fs.readFileSync(p, 'utf8');
+  const srcLines = openFile && openFile.path === p ? [...openFile.lines] : fs.readFileSync(p, 'utf8').split('\n');
+  const src = srcLines.join('\n');
   const cfg = loadAgentConfig(AGENT_CONFIG_FILE);
-  let full = '';
-  try {
-    full = await new AgentClient(cfg).run(traceAssistPrompt(path.basename(p), src, name, reason), {
-      onChunk: (delta) => send({ type: 'agentChunk', id, delta }),
-    });
-  } catch (e) {
-    send({ type: 'agentError', id, message: e instanceof Error ? e.message : String(e) });
-    return;
+  const client = new AgentClient(cfg);
+
+  let directive = '';
+  let err: string | null = reason || 'needs an input';
+  const MAX = 3;
+  for (let attempt = 0; attempt < MAX; attempt++) {
+    const prompt =
+      attempt === 0
+        ? traceAssistPrompt(path.basename(p), src, name, reason)
+        : retryPrompt(path.basename(p), src, name, directive, err ?? '');
+    let full = '';
+    try {
+      full = await client.run(prompt, { onChunk: (delta) => send({ type: 'agentChunk', id, delta }) });
+    } catch (e) {
+      send({ type: 'agentError', id, message: e instanceof Error ? e.message : String(e) });
+      return;
+    }
+    directive = extractDirectives(full);
+    if (!directive) {
+      send({ type: 'agentDone', id, text: full });
+      return;
+    }
+    err = await tryDirective(srcLines, line, directive, name);
+    if (!err) break; // verified — traces clean
+    if (attempt < MAX - 1) send({ type: 'agentChunk', id, delta: `\n[attempt ${attempt + 1} failed: ${err} — retrying]\n` });
   }
-  const directive = extractDirectives(full);
-  send({ type: 'agentDone', id, text: directive ? `Proposed for ${name}():\n${directive}` : full });
-  if (!directive) return;
+
+  send({ type: 'agentDone', id, text: `Proposed for ${name}()${err ? ` (still failing: ${err})` : ' — verified ✓'}:\n${directive}` });
   if ((cfg.trust ?? 'review') === 'auto') {
     await insertDirective(p, line, directive);
   } else {
-    send({ type: 'directiveProposed', forFunction: name, path: p, line, directive, explanation: full });
+    send({
+      type: 'directiveProposed',
+      forFunction: name,
+      path: p,
+      line,
+      directive,
+      explanation: err ? `still failing: ${err}` : 'verified ✓ — traces clean',
+    });
   }
 }
 

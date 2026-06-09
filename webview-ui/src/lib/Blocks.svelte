@@ -68,6 +68,9 @@
         {#if l.problem}
           <div class="prob">⚠ {l.problem.message}</div>
         {/if}
+        {#if l.op}
+          <div class="op">∗ {l.op}</div>
+        {/if}
       {/each}
     </div>
   {/each}

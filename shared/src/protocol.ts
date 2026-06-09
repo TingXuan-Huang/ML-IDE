@@ -19,6 +19,7 @@ export interface BlockLine {
   text: string; // source text, for the blocks-zone render
   shapes: ShapeRecord[]; // tensors live on/after this line
   problem?: { kind: 'mismatch' | 'broadcast'; message: string };
+  op?: string; // matmul/broadcast note, e.g. "matmul [2,8] · [8,4] → [2,4]"
 }
 
 export interface FunctionBlock {

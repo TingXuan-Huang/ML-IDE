@@ -24,6 +24,8 @@ export interface RawTrace {
   // Provenance per traced function (the exact call used, or a "needs # fusion:" hint),
   // keyed by the function's def line so it pins to the right block.
   notes?: Array<{ line: number; note: string }>;
+  // matmul/broadcast op notes keyed by source line.
+  ops?: Record<string, string>;
 }
 
 /**
@@ -61,7 +63,7 @@ export function toFileStructure(
       const problem = problemAt.has(ln)
         ? { kind: 'mismatch' as const, message: problemAt.get(ln)! }
         : undefined;
-      lines.push({ line: ln, text: getLine(ln), shapes, problem });
+      lines.push({ line: ln, text: getLine(ln), shapes, problem, op: trace?.ops?.[String(ln)] });
     }
     return {
       name: fn.name,
@@ -81,6 +83,7 @@ export interface TraceModuleResult {
   records: RawTrace['records'];
   problems: Array<{ line: number; message: string }>; // one per crashing function
   notes: Array<{ label: string; line: number; note: string }>; // call used per target (provenance)
+  ops?: Record<string, string>; // matmul/broadcast notes by line
 }
 
 /** Fold a trace_module result into a RawTrace so toFileStructure can render it. */
@@ -89,5 +92,6 @@ export function moduleTraceToRaw(m: TraceModuleResult): RawTrace {
     records: m.records,
     crashes: m.problems,
     notes: m.notes.map((n) => ({ line: n.line, note: n.note })),
+    ops: m.ops,
   };
 }

@@ -429,7 +429,7 @@ def trace_module(path: str):
             else:
                 notes.append({"label": node.name, "line": node.lineno, "note": f"{node.name}({ishape})"})
 
-    return {"records": records, "problems": problems, "notes": notes}
+    return {"records": records, "problems": problems, "notes": notes, "ops": _op_notes(tree, records)}
 
 
 def _is_model(cls) -> bool:
@@ -450,6 +450,54 @@ def _method_line(class_node, method_name: str) -> int:
         if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) and sub.name == method_name:
             return sub.lineno
     return class_node.lineno
+
+
+def _op_notes(tree, records):
+    """Note matmul / broadcasting ops per line, using the operand & result shapes captured
+    in `records`. Only annotates ops between simple local names (skips complex exprs).
+    Returns {lineno: note} e.g. {9: 'matmul [2,8] · [8,4] → [2,4]'}."""
+    import ast
+
+    def shp(ln, nm):
+        v = (records.get(ln) or {}).get(nm)
+        return None if not v else "[" + ", ".join(str(d) for d in v["shape"]) + "]"
+
+    def operand(node):
+        return node.id if isinstance(node, ast.Name) else None
+
+    sym = {ast.Mult: "*", ast.Add: "+", ast.Sub: "-"}
+    out = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        ln = node.lineno
+        tgt = node.targets[0]
+        tshape = (shp(ln, tgt.id) if isinstance(tgt, ast.Name) else None) or shp(ln, "return")
+        val = node.value
+        if isinstance(val, ast.BinOp) and isinstance(val.op, ast.MatMult):  # a @ b
+            sa, sb = shp(ln, operand(val.left)), shp(ln, operand(val.right))
+            if sa and sb:
+                out[ln] = f"matmul {sa} · {sb} → {tshape or '?'}"
+        elif isinstance(val, ast.Call) and _call_attr(val.func) in ("matmul", "bmm"):  # torch.matmul/bmm
+            args = [operand(a) for a in val.args[:2]]
+            ss = [shp(ln, a) for a in args]
+            if len(ss) == 2 and ss[0] and ss[1]:
+                out[ln] = f"{_call_attr(val.func)} {ss[0]} · {ss[1]} → {tshape or '?'}"
+        elif isinstance(val, ast.BinOp) and type(val.op) in sym:  # a * b / a + b / a - b
+            sa, sb = shp(ln, operand(val.left)), shp(ln, operand(val.right))
+            if sa and sb and sa != sb:  # different shapes -> broadcasting
+                out[ln] = f"broadcast {sa} {sym[type(val.op)]} {sb} → {tshape or '?'}"
+    return out
+
+
+def _call_attr(func):
+    import ast
+
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return None
 
 
 def _locate(tree, name, line):

@@ -320,6 +320,27 @@ def test_directive_model_override_ctor_args(tmp_path):
     assert any(any(v["shape"] == [2, 4] for v in rec.values()) for rec in res["records"].values())
 
 
+def test_trace_module_notes_matmul_and_broadcast(tmp_path):
+    f = _write(
+        tmp_path,
+        "ops.py",
+        "import torch, torch.nn as nn\n"
+        "class M(nn.Module):\n"
+        "    def __init__(s):\n"
+        "        super().__init__(); s.q = nn.Linear(8, 8); s.k = nn.Linear(8, 8)\n"
+        "    def forward(s, x):\n"
+        "        a = s.q(x)\n"           # [2, 8]
+        "        bt = s.k(x).t()\n"      # [8, 2]
+        "        scores = a @ bt\n"      # matmul -> [2, 2]
+        "        bias = torch.zeros(8)\n"  # [8]
+        "        out = a + bias\n"       # broadcast [2, 8] + [8] -> [2, 8]
+        "        return out\n",
+    )
+    ops = list(tracer.trace_module(f)["ops"].values())
+    assert any("matmul" in o and "[8, 2]" in o for o in ops), ops
+    assert any("broadcast" in o for o in ops), ops
+
+
 def test_directive_input_in_trace_module(tmp_path):
     # trace_module honors a forward input directive (custom shape/dtype).
     f = _write(

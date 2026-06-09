@@ -35,13 +35,13 @@
     for (const fn of s.functions) {
       for (const l of fn.lines) {
         if (l.line < 1 || l.line > lastLine) continue;
-        const changed = l.shapes.filter((x) => x.changed);
-        if (changed.length) {
+        const parts = l.shapes.filter((x) => x.changed).map((x) => `${x.varName}[${x.shape.join(', ')}]`);
+        if (l.op) parts.push('∗ ' + l.op);
+        if (parts.length) {
           const col = model.getLineMaxColumn(l.line);
-          const text = '   ' + changed.map((x) => `${x.varName}[${x.shape.join(', ')}]`).join('  ');
           decos.push({
             range: new monaco.Range(l.line, col, l.line, col),
-            options: { after: { content: text, inlineClassName: 'fusion-shape' } },
+            options: { after: { content: '   ' + parts.join('   '), inlineClassName: 'fusion-shape' } },
           });
         }
         if (l.problem) {

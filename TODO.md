@@ -48,8 +48,15 @@ Roadmap context: `STANDALONE_PLAN.md` (P0–P8), `AGENT_PLAN.md` (agent v1), `BU
 ## Shipped this session
 - Inline shapes in the Monaco editor (ghost-text + red markers) · cockpit horizontal scroll ·
   draggable pane splitters · file-level **✦ ask** (resolve every un-traceable function).
+- **Agent↔tracer retry loop** ✅ — trace-assist verifies each proposed directive on a temp copy
+  and feeds shape errors back to the agent (≤3 rounds) before proposing the verified one.
+- **#7 matmul/broadcast op notes** ✅ — annotated in Blocks + editor ghost-text.
+
+## Remaining (bigger, queued)
+- **#1 agent memory / self-improving tracer** · **#2 more viz** · **#3 open a folder + cross-file
+  graph** · **#4 light mode** · **#5 real input** (needs folder) · **#6 symbolic trace** · **#8 paper-reading**.
 
 ## Known smaller items
 - editor gutter decorations for shape problems · slim Monaco to python-only (3.3 MB → ~1 MB) ·
   remove redundant `extension/package-lock.json` · tree-sitter no-env structure · CI ·
-  agent↔tracer retry loop (feed shape errors back for a revised directive).
+  per-function ▶ trace could also surface op notes (only trace_module does today).
