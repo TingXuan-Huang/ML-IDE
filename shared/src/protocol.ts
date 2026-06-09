@@ -96,7 +96,12 @@ export type HostMessage =
   | { type: 'callGraph'; graph: CallGraph }
   | { type: 'dataView'; meta: DataMeta }
   | { type: 'focus'; zone: Zone }
-  | { type: 'hintDensity'; mode: HintDensity };
+  | { type: 'hintDensity'; mode: HintDensity }
+  // ---- agent (CLI coding assistant) ----
+  | { type: 'agentChunk'; id: string; delta: string } // streamed stdout delta
+  | { type: 'agentDone'; id: string; text: string } // run finished OK (full text)
+  | { type: 'agentError'; id: string; message: string }
+  | { type: 'agentConfig'; kind: string; command: string }; // which agent is configured
 
 // ---- webview -> host -----------------------------------------------------------
 export type WebviewMessage =
@@ -109,4 +114,8 @@ export type WebviewMessage =
   | { type: 'saveDocument'; path: string; text: string }
   | { type: 'pickDataFile' }
   | { type: 'setPrimaryZone'; zone: Zone }
-  | { type: 'toggleHintDensity' };
+  | { type: 'toggleHintDensity' }
+  // ---- agent ----
+  | { type: 'agentPrompt'; id: string; text: string } // user asked the agent something
+  | { type: 'agentCancel'; id: string }
+  | { type: 'getAgentConfig' };

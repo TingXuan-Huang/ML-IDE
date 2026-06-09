@@ -4,6 +4,7 @@
   // via a dynamic import so it's code-split and never ships in the VS Code webview.
   import { isDesktop } from './store';
   import Cockpit from './lib/Cockpit.svelte';
+  import Chat from './lib/Chat.svelte';
   import type { ComponentType } from 'svelte';
 
   let Editor: ComponentType | null = null;
@@ -20,6 +21,7 @@
       {/if}
     </div>
     <div class="pane cockpit"><Cockpit /></div>
+    <div class="pane chat"><Chat /></div>
   </div>
 {:else}
   <Cockpit />
@@ -42,8 +44,12 @@
   }
   .pane.cockpit {
     flex: 1 1 0;
-    min-width: 340px;
+    min-width: 300px;
     overflow-y: auto;
+  }
+  .pane.chat {
+    flex: 0 0 340px;
+    border-left: 1px solid var(--vscode-panel-border);
   }
   .loading {
     padding: 20px;

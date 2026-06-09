@@ -27,6 +27,23 @@ export function revealInEditor(path: string, line: number): void {
   else post({ type: 'revealSymbol', path, line });
 }
 
+// --- agent chat ----------------------------------------------------------------
+export interface ChatMsg {
+  id?: string; // matches the agent run id (agent messages only)
+  role: 'user' | 'agent';
+  text: string;
+  streaming?: boolean;
+  error?: boolean;
+}
+export const chat = writable<ChatMsg[]>([]);
+export const agentBusy = writable<boolean>(false);
+export const agentInfo = writable<{ kind: string; command: string } | null>(null);
+let _agentId = 0;
+export const nextAgentId = (): string => `a${++_agentId}`;
+
+const updateMsg = (ms: ChatMsg[], id: string, fn: (m: ChatMsg) => ChatMsg): ChatMsg[] =>
+  ms.map((m) => (m.id === id ? fn(m) : m));
+
 /** Apply a message from the host to the stores. */
 export function applyHostMessage(m: HostMessage): void {
   switch (m.type) {
@@ -48,6 +65,20 @@ export function applyHostMessage(m: HostMessage): void {
       break;
     case 'focus':
       zone.set(m.zone);
+      break;
+    case 'agentConfig':
+      agentInfo.set({ kind: m.kind, command: m.command });
+      break;
+    case 'agentChunk':
+      chat.update((ms) => updateMsg(ms, m.id, (x) => ({ ...x, text: x.text + m.delta })));
+      break;
+    case 'agentDone':
+      chat.update((ms) => updateMsg(ms, m.id, (x) => ({ ...x, text: m.text || x.text, streaming: false })));
+      agentBusy.set(false);
+      break;
+    case 'agentError':
+      chat.update((ms) => updateMsg(ms, m.id, (x) => ({ ...x, text: m.message, streaming: false, error: true })));
+      agentBusy.set(false);
       break;
   }
 }

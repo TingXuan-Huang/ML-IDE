@@ -8,11 +8,14 @@
 // Host↔UI contract mirrors the VS Code webview: renderer→host over IPC ('renderer:message'),
 // host→renderer via webContents.send('host:message') which the preload re-emits as a
 // window 'message' event — so webview-ui runs byte-for-byte unchanged.
-import { app, BrowserWindow, ipcMain, dialog, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, protocol } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import {
   HelperClient,
+  AgentClient,
+  loadAgentConfig,
   toFileStructure,
   moduleTraceToRaw,
   type RawStructure,
@@ -24,30 +27,63 @@ import type { CallGraph, HostMessage, WebviewMessage } from '@fusion/shared';
 // hosts/desktop/dist/main.js -> up three to the repo root.
 const REPO = path.resolve(__dirname, '..', '..', '..');
 const LENS_HELPER = path.join(REPO, 'lens-helper');
-const UI_INDEX = path.join(REPO, 'webview-ui', 'dist', 'index.html');
+const UI_DIST = path.join(REPO, 'webview-ui', 'dist');
 
-// The cockpit UI is themed via VS Code's `--vscode-*` CSS variables. VS Code injects
-// those; outside it they're undefined and the UI renders unstyled. Theming is a HOST
-// job, so the desktop host injects a default dark theme (Dark+ values). Scoped to this
-// window only via insertCSS — it can never leak into the VS Code host.
-const THEME_CSS = `:root{
-  --vscode-foreground:#cccccc;
-  --vscode-editor-background:#1e1e1e;
-  --vscode-editor-font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,"Cascadia Code",monospace;
-  --vscode-editor-font-size:13px;
-  --vscode-tab-inactiveBackground:#2d2d2d;
-  --vscode-tab-inactiveForeground:#969696;
-  --vscode-panel-border:#3c3c3c;
-  --vscode-focusBorder:#007fd4;
-  --vscode-textLink-foreground:#3794ff;
-  --vscode-textLink-activeForeground:#4daafc;
-  --vscode-descriptionForeground:#9d9d9d;
-  --vscode-editorWidget-background:#252526;
-  --vscode-symbolIcon-functionForeground:#dcdcaa;
-  --vscode-inputValidation-errorBackground:#5a1d1d;
-  --vscode-errorForeground:#f48771;
-  --vscode-charts-blue:#4daafc;
-}`;
+// Serve the built UI over a PRIVILEGED custom scheme (fusion://) instead of file://.
+// Chromium blocks ES-module <script type="module"> loads over file:// (CORS), which a
+// Vite bundle is — so file:// gives a blank window. A standard+secure scheme behaves
+// like https: modules, dynamic import() (Monaco code-split), and workers all load.
+const UI_SCHEME = 'fusion';
+const MIME: Record<string, string> = {
+  '.html': 'text/html',
+  '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
+  '.css': 'text/css',
+  '.json': 'application/json',
+  '.map': 'application/json',
+  '.svg': 'image/svg+xml',
+  '.wasm': 'application/wasm',
+  '.ttf': 'font/ttf',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+};
+protocol.registerSchemesAsPrivileged([
+  // corsEnabled is required: Vite emits <script type="module" crossorigin>, and a
+  // crossorigin module fetch over a custom scheme without CORS gets blocked -> blank page.
+  { scheme: UI_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
+]);
+
+// Content-Security-Policy for the served document. Strict (no unsafe-eval): self scripts,
+// inline styles (Monaco + our theme inject <style>), self/blob workers (Monaco's worker).
+const CSP = [
+  "default-src 'none'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "font-src 'self' data:",
+  "worker-src 'self' blob:",
+  "child-src 'self' blob:",
+  "connect-src 'self'",
+].join('; ');
+
+async function serveUi(request: Request): Promise<Response> {
+  const { pathname } = new URL(request.url); // fusion://app/assets/main.js -> /assets/main.js
+  const rel = pathname === '/' ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, '');
+  const file = path.join(UI_DIST, rel);
+  if (!file.startsWith(UI_DIST)) return new Response('forbidden', { status: 403 }); // no path traversal
+  try {
+    const data = await fs.promises.readFile(file);
+    const ext = path.extname(file).toLowerCase();
+    const headers: Record<string, string> = {
+      'content-type': MIME[ext] ?? 'application/octet-stream',
+      'access-control-allow-origin': '*',
+    };
+    if (ext === '.html') headers['content-security-policy'] = CSP; // CSP applies to the document
+    return new Response(data, { headers });
+  } catch {
+    return new Response('not found', { status: 404 });
+  }
+}
 
 let win: BrowserWindow | undefined;
 let helper: HelperClient | undefined;
@@ -171,6 +207,38 @@ async function pickDataFile(): Promise<void> {
 let _seq = 0;
 const stamp = (): number => ++_seq;
 
+// --- agent (CLI coding assistant) ----------------------------------------------
+// Config lives at ~/.fusion/agent.json (written by the settings page in a later step);
+// absent => the claude preset. Re-read per run so config edits take effect immediately.
+const AGENT_CONFIG_FILE = path.join(os.homedir(), '.fusion', 'agent.json');
+const agentRuns = new Map<string, AbortController>();
+
+// Give the agent the open file as context so answers are about the user's code.
+function agentPrompt(userText: string): string {
+  if (!openFile) return userText;
+  const code = openFile.lines.join('\n');
+  return `You are an assistant inside an ML/DS IDE. The user is editing this Python file (${path.basename(
+    openFile.path,
+  )}):\n\n\`\`\`python\n${code}\n\`\`\`\n\nUser: ${userText}`;
+}
+
+async function runAgent(id: string, text: string): Promise<void> {
+  const ctrl = new AbortController();
+  agentRuns.set(id, ctrl);
+  try {
+    const client = new AgentClient(loadAgentConfig(AGENT_CONFIG_FILE));
+    const full = await client.run(agentPrompt(text), {
+      signal: ctrl.signal,
+      onChunk: (delta) => send({ type: 'agentChunk', id, delta }),
+    });
+    send({ type: 'agentDone', id, text: full });
+  } catch (e) {
+    send({ type: 'agentError', id, message: e instanceof Error ? e.message : String(e) });
+  } finally {
+    agentRuns.delete(id);
+  }
+}
+
 async function onMessage(m: WebviewMessage): Promise<void> {
   switch (m.type) {
     case 'ready':
@@ -187,6 +255,17 @@ async function onMessage(m: WebviewMessage): Promise<void> {
     case 'saveDocument':
       await saveDocument(m.path, m.text);
       break;
+    case 'agentPrompt':
+      await runAgent(m.id, m.text);
+      break;
+    case 'agentCancel':
+      agentRuns.get(m.id)?.abort();
+      break;
+    case 'getAgentConfig': {
+      const c = loadAgentConfig(AGENT_CONFIG_FILE);
+      send({ type: 'agentConfig', kind: c.kind, command: c.command });
+      break;
+    }
     case 'revealSymbol':
       break; // desktop scrolls Monaco in-renderer (revealInEditor); nothing to do host-side
   }
@@ -225,15 +304,19 @@ function createWindow(): void {
       nodeIntegration: false,
     },
   });
-  // Inject the host theme as early as the DOM exists (minimal flash; window bg is dark).
-  win.webContents.on('dom-ready', () => void win?.webContents.insertCSS(THEME_CSS));
-  void win.loadFile(UI_INDEX);
+  // Surface load failures instead of a silent blank window.
+  win.webContents.on('did-fail-load', (_e, code, desc, url) =>
+    console.error(`[fusion] renderer failed to load: ${code} ${desc} ${url}`),
+  );
+  win.webContents.on('render-process-gone', (_e, d) => console.error('[fusion] render-process-gone', d));
+  void win.loadURL(`${UI_SCHEME}://app/index.html`);
   win.on('closed', () => (win = undefined));
 }
 
 ipcMain.on('renderer:message', (_e, m: WebviewMessage) => void onMessage(m));
 
 void app.whenReady().then(() => {
+  protocol.handle(UI_SCHEME, serveUi);
   buildMenu();
   createWindow();
 });
