@@ -1,5 +1,5 @@
-import { writable } from 'svelte/store';
-import type { CallGraph, DataMeta, FileStructure, HostMessage, TraceState, Zone } from '@fusion/shared';
+import { get, writable } from 'svelte/store';
+import type { AgentConfigWire, CallGraph, DataMeta, FileStructure, HostMessage, TraceState, Zone } from '@fusion/shared';
 import { post } from './vscode';
 
 export const structure = writable<FileStructure | null>(null);
@@ -34,15 +34,67 @@ export interface ChatMsg {
   text: string;
   streaming?: boolean;
   error?: boolean;
+  directive?: { path: string; line: number; text: string }; // a proposed # fusion: directive (Insert)
 }
 export const chat = writable<ChatMsg[]>([]);
 export const agentBusy = writable<boolean>(false);
-export const agentInfo = writable<{ kind: string; command: string } | null>(null);
+export const agentConfig = writable<AgentConfigWire | null>(null);
+export const settingsOpen = writable<boolean>(false);
 let _agentId = 0;
 export const nextAgentId = (): string => `a${++_agentId}`;
 
 const updateMsg = (ms: ChatMsg[], id: string, fn: (m: ChatMsg) => ChatMsg): ChatMsg[] =>
   ms.map((m) => (m.id === id ? fn(m) : m));
+
+/** Ask the agent to make a function traceable (writes a `# fusion:` directive). */
+export function askTrace(path: string, name: string, line: number): void {
+  const id = nextAgentId();
+  chat.update((ms) => [
+    ...ms,
+    { role: 'user', text: `✦ make ${name}() traceable` },
+    { id, role: 'agent', text: '', streaming: true },
+  ]);
+  agentBusy.set(true);
+  post({ type: 'traceAssist', id, path, name, line });
+}
+
+/** Apply an agent-proposed directive (review mode -> user clicked Insert). */
+export function applyDirective(d: { path: string; line: number; text: string }): void {
+  post({ type: 'insertDirective', path: d.path, line: d.line, text: d.text });
+}
+
+/** Ask the agent to resolve EVERY function in the file that couldn't auto-trace. */
+export function askTraceFile(): void {
+  const s = get(structure);
+  if (!s) return;
+  if (!s.hasShapes) {
+    chat.update((ms) => [
+      ...ms,
+      { role: 'agent', text: '✦ Trace the file first (▶ Trace this file). Then ✦ ask resolves the functions that couldn’t auto-trace.' },
+    ]);
+    return;
+  }
+  const dunder = (n: string): boolean => n.startsWith('__') && n.endsWith('__');
+  const targets = s.functions.filter((f) => !dunder(f.name) && !f.lines.some((l) => l.shapes.length));
+  if (!targets.length) {
+    chat.update((ms) => [...ms, { role: 'agent', text: '✦ Every function already traced — nothing to resolve.' }]);
+    return;
+  }
+  for (const f of targets) askTrace(s.path, f.name, f.startLine);
+}
+
+/** Persist agent settings (config page). */
+export function saveAgentConfig(cfg: AgentConfigWire): void {
+  post({ type: 'saveAgentConfig', config: cfg });
+  settingsOpen.set(false);
+}
+
+// Settings "Test connection" — run the unsaved config once and report ✓/✗.
+export const agentTest = writable<{ pending: boolean; ok?: boolean; message?: string } | null>(null);
+export function testAgent(cfg: AgentConfigWire): void {
+  agentTest.set({ pending: true });
+  post({ type: 'testAgentConfig', id: nextAgentId(), config: cfg });
+}
 
 /** Apply a message from the host to the stores. */
 export function applyHostMessage(m: HostMessage): void {
@@ -67,7 +119,20 @@ export function applyHostMessage(m: HostMessage): void {
       zone.set(m.zone);
       break;
     case 'agentConfig':
-      agentInfo.set({ kind: m.kind, command: m.command });
+      agentConfig.set(m.config);
+      break;
+    case 'agentTestResult':
+      agentTest.set({ pending: false, ok: m.ok, message: m.message });
+      break;
+    case 'directiveProposed':
+      chat.update((ms) => [
+        ...ms,
+        {
+          role: 'agent',
+          text: `Insert into ${m.path.split('/').pop()} to trace ${m.forFunction}()?`,
+          directive: { path: m.path, line: m.line, text: m.directive },
+        },
+      ]);
       break;
     case 'agentChunk':
       chat.update((ms) => updateMsg(ms, m.id, (x) => ({ ...x, text: x.text + m.delta })));

@@ -16,13 +16,15 @@ import {
   HelperClient,
   AgentClient,
   loadAgentConfig,
+  saveAgentConfig,
   toFileStructure,
   moduleTraceToRaw,
+  type AgentConfig,
   type RawStructure,
   type RawTrace,
   type TraceModuleResult,
 } from '@fusion/core';
-import type { CallGraph, HostMessage, WebviewMessage } from '@fusion/shared';
+import type { AgentConfigWire, CallGraph, HostMessage, WebviewMessage } from '@fusion/shared';
 
 // hosts/desktop/dist/main.js -> up three to the repo root.
 const REPO = path.resolve(__dirname, '..', '..', '..');
@@ -239,6 +241,97 @@ async function runAgent(id: string, text: string): Promise<void> {
   }
 }
 
+// --- agent config (settings page) ----------------------------------------------
+function toWire(c: AgentConfig): AgentConfigWire {
+  return {
+    kind: c.kind,
+    command: c.command,
+    args: c.args,
+    promptVia: c.promptVia,
+    trust: c.trust ?? 'review',
+    model: c.model,
+  };
+}
+
+// Settings "Test": run the (unsaved) config with a tiny prompt to confirm it's reachable.
+async function testAgentConfig(id: string, cfg: AgentConfig): Promise<void> {
+  try {
+    const out = await new AgentClient(cfg).run('Reply with exactly: ok', { timeoutMs: 25000 });
+    send({ type: 'agentTestResult', id, ok: true, message: out.trim().slice(0, 200) || '(empty reply)' });
+  } catch (e) {
+    send({ type: 'agentTestResult', id, ok: false, message: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+// --- trace-assist: agent authors a `# fusion:` directive -----------------------
+const extractDirectives = (text: string): string =>
+  text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => /^#\s*fusion:\s*(input|model)\s*=/.test(l))
+    .join('\n');
+
+const traceAssistPrompt = (file: string, src: string, name: string, reason: string): string =>
+  [
+    `Our PyTorch shape tracer can't auto-call \`${name}\` in ${file} (reason: ${reason || 'needs an input'}).`,
+    `Write a "# fusion:" directive that makes it traceable:`,
+    `  # fusion: input = <expr>      (forward input; a (a, b) tuple supplies multiple positional args)`,
+    `  # fusion: model = Class(...)  (only if the model needs constructor args)`,
+    `Use torch.randn / torch.randint with realistic shapes and dtypes for THIS model.`,
+    `Reply with ONLY the directive line(s) — no prose, no code fences.`,
+    '',
+    '```python',
+    src,
+    '```',
+  ].join('\n');
+
+async function runTraceAssist(id: string, p: string, name: string, line: number): Promise<void> {
+  let reason = '';
+  try {
+    const res = await getHelper().request<{ note?: string }>('trace_function', { path: p, name, line });
+    reason = res.note ?? '';
+  } catch {
+    /* ignore */
+  }
+  const src = openFile && openFile.path === p ? openFile.lines.join('\n') : fs.readFileSync(p, 'utf8');
+  const cfg = loadAgentConfig(AGENT_CONFIG_FILE);
+  let full = '';
+  try {
+    full = await new AgentClient(cfg).run(traceAssistPrompt(path.basename(p), src, name, reason), {
+      onChunk: (delta) => send({ type: 'agentChunk', id, delta }),
+    });
+  } catch (e) {
+    send({ type: 'agentError', id, message: e instanceof Error ? e.message : String(e) });
+    return;
+  }
+  const directive = extractDirectives(full);
+  send({ type: 'agentDone', id, text: directive ? `Proposed for ${name}():\n${directive}` : full });
+  if (!directive) return;
+  if ((cfg.trust ?? 'review') === 'auto') {
+    await insertDirective(p, line, directive);
+  } else {
+    send({ type: 'directiveProposed', forFunction: name, path: p, line, directive, explanation: full });
+  }
+}
+
+// Write a directive just above `line` (matching indentation), refresh the editor, re-trace.
+async function insertDirective(p: string, line: number, text: string): Promise<void> {
+  const src = fs.readFileSync(p, 'utf8').split('\n');
+  const idx = Math.max(0, line - 1);
+  const indent = (src[idx] || '').match(/^\s*/)?.[0] ?? '';
+  const dir = text
+    .split('\n')
+    .map((d) => d.trim())
+    .filter(Boolean)
+    .map((d) => indent + d);
+  src.splice(idx, 0, ...dir);
+  const newText = src.join('\n');
+  fs.writeFileSync(p, newText, 'utf8');
+  if (openFile && openFile.path === p) openFile.lines = newText.split('\n');
+  send({ type: 'openDocument', path: p, text: newText, language: 'python' });
+  await runTrace(); // trace_module now honors the new directive
+}
+
 async function onMessage(m: WebviewMessage): Promise<void> {
   switch (m.type) {
     case 'ready':
@@ -261,11 +354,22 @@ async function onMessage(m: WebviewMessage): Promise<void> {
     case 'agentCancel':
       agentRuns.get(m.id)?.abort();
       break;
-    case 'getAgentConfig': {
-      const c = loadAgentConfig(AGENT_CONFIG_FILE);
-      send({ type: 'agentConfig', kind: c.kind, command: c.command });
+    case 'getAgentConfig':
+      send({ type: 'agentConfig', config: toWire(loadAgentConfig(AGENT_CONFIG_FILE)) });
       break;
-    }
+    case 'saveAgentConfig':
+      saveAgentConfig(AGENT_CONFIG_FILE, m.config as AgentConfig);
+      send({ type: 'agentConfig', config: m.config });
+      break;
+    case 'testAgentConfig':
+      await testAgentConfig(m.id, m.config as AgentConfig);
+      break;
+    case 'traceAssist':
+      await runTraceAssist(m.id, m.path, m.name, m.line);
+      break;
+    case 'insertDirective':
+      await insertDirective(m.path, m.line, m.text);
+      break;
     case 'revealSymbol':
       break; // desktop scrolls Monaco in-renderer (revealInEditor); nothing to do host-side
   }

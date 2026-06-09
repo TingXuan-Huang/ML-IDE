@@ -19,12 +19,37 @@ Roadmap context: `STANDALONE_PLAN.md` (P0–P8), `AGENT_PLAN.md` (agent v1), `BU
 4. **Light mode for the editor + UI.** A theme toggle (dark/light) — set the `--vscode-*` variables
    for a light palette and switch Monaco's theme (`vs` vs `vs-dark`). Persist the choice in config.
 
+## Requested features (2026-06-09, batch 2)
+5. **Trace with REAL input** (not synthesized). Capture the actual tensors a model is called with in
+   the user's own code / training script and trace those, instead of `# fusion: input` guesses. Best
+   once we can open a whole folder (find the entrypoint / call site). The `# fusion: input` directive
+   is the manual stand-in until then. *(Depends on folder support — feature 3.)*
+6. **Abstract / symbolic trace** (paper-reading add-on). Trace with NAMED dims — `(B, H, W, D)`,
+   `(B, L, D)` — instead of concrete numbers, so shapes read like a paper. Pairs with a future
+   paper-reading feature (map equations ↔ code). Likely a symbolic shape engine that tracks dim
+   *names* through ops (or annotates concrete dims with inferred names).
+7. **Annotate broadcast / matmul ops.** When a line does a matmul (`@`, `matmul`, `bmm`, `einsum`) or
+   a broadcasting elementwise op (`*`/`+` between mismatched shapes), the trace should NOTE it, e.g.
+   `matmul [2,8]·[8,4]→[2,4]`, `broadcast [2,1,8]*[2,8,8]→[2,8,8]`. Impl: AST-detect the op per line +
+   compare runtime operand shapes → attach an `op` note to that BlockLine. Near-term, standalone.
+8. **Paper-reading mode** (the abstract-trace consumer). Read an ML paper beside the code, map
+   equations / architecture ↔ functions, and show the symbolic `(B,H,W,D)` trace next to the paper's
+   notation. Big, later — depends on #6 (symbolic trace). Likely uses `reading-academic-paper-ml`.
+
 ## In-flight
-- **Agent v1**: ① AgentClient ✅ · ② chat sidebar ✅ · ③ trace-assist (next) · ④ config page.
-- **Desktop blank-screen**: theme now injected in the renderer (was gated on a host event that
-  never fired). Remove debug instrumentation once confirmed working.
+- **Agent v1**: ① AgentClient ✅ · ② chat sidebar ✅ · ③ trace-assist ✅ · ④ config page ✅.
+  - ③ "✦ ask" on a function → agent writes a `# fusion:` directive → review (Insert button) or
+    auto (insert + trace) per the trust setting. *Next:* the agent↔tracer retry loop (feed shape
+    errors back for a revised directive).
+  - ④ ⚙ in the chat header → settings modal (agent kind/command/args/promptVia/trust) →
+    `~/.fusion/agent.json`.
+- **Desktop blank-screen**: FIXED (fusion:// protocol + renderer theme + Chat afterUpdate). ✅
+
+## Shipped this session
+- Inline shapes in the Monaco editor (ghost-text + red markers) · cockpit horizontal scroll ·
+  draggable pane splitters · file-level **✦ ask** (resolve every un-traceable function).
 
 ## Known smaller items
-- Draggable splitter between panes · editor gutter decorations for shape problems ·
-  slim Monaco to python-only (3.3 MB → ~1 MB) · remove redundant `extension/package-lock.json` ·
-  tree-sitter no-env structure · CI.
+- editor gutter decorations for shape problems · slim Monaco to python-only (3.3 MB → ~1 MB) ·
+  remove redundant `extension/package-lock.json` · tree-sitter no-env structure · CI ·
+  agent↔tracer retry loop (feed shape errors back for a revised directive).

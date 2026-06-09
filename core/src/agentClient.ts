@@ -14,6 +14,8 @@ export interface AgentConfig {
   command: string; // executable, e.g. "claude"
   args: string[]; // argv; a "{prompt}" entry/substring is replaced when promptVia==='arg'
   promptVia: 'stdin' | 'arg'; // how the prompt reaches the agent
+  trust?: 'review' | 'auto'; // how agent-suggested directives are applied (default 'review')
+  model?: string; // optional model; for claude/codex we append `--model <model>`
 }
 
 export interface AgentRunOptions {
@@ -28,10 +30,10 @@ export const AGENT_PRESETS: Record<AgentKind, AgentConfig> = {
   // `claude -p "<prompt>"` / `codex exec "<prompt>"` — prompt as an argv slot (spawn passes
   // it literally, no shell, so newlines/quotes in the code context are safe). Big files can
   // exceed ARG_MAX; switch a preset to promptVia:'stdin' in the config if that bites.
-  claude: { kind: 'claude', command: 'claude', args: ['-p', '{prompt}'], promptVia: 'arg' },
-  codex: { kind: 'codex', command: 'codex', args: ['exec', '{prompt}'], promptVia: 'arg' },
-  custom: { kind: 'custom', command: '', args: [], promptVia: 'stdin' },
-  mock: { kind: 'mock', command: '', args: [], promptVia: 'stdin' },
+  claude: { kind: 'claude', command: 'claude', args: ['-p', '{prompt}'], promptVia: 'arg', trust: 'review' },
+  codex: { kind: 'codex', command: 'codex', args: ['exec', '{prompt}'], promptVia: 'arg', trust: 'review' },
+  custom: { kind: 'custom', command: '', args: [], promptVia: 'stdin', trust: 'review' },
+  mock: { kind: 'mock', command: '', args: [], promptVia: 'stdin', trust: 'review' },
 };
 
 export function defaultAgentConfig(): AgentConfig {
@@ -88,6 +90,9 @@ export class AgentClient {
 
   private runSpawn(prompt: string, opts: AgentRunOptions): Promise<string> {
     const argv = this.cfg.args.map((a) => a.replace('{prompt}', prompt));
+    // Optional model: claude/codex take `--model <model>`. For 'custom', put it in args yourself.
+    const model = this.cfg.model?.trim();
+    if (model && (this.cfg.kind === 'claude' || this.cfg.kind === 'codex')) argv.push('--model', model);
     return new Promise<string>((resolve, reject) => {
       let proc: ChildProcess;
       try {

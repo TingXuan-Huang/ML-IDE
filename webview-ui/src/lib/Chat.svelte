@@ -1,9 +1,9 @@
 <script lang="ts">
-  // Agent chat sidebar (desktop). Streams the user's configured CLI agent (Claude Code /
-  // Codex / custom) via the host. v1 is stateless per prompt (the host attaches the open
-  // file as context); multi-turn memory + trace-assist land in later steps.
+  // Agent chat sidebar (desktop). Streams the configured CLI agent; also surfaces
+  // trace-assist proposals (a `# fusion:` directive with an Insert button) and a gear
+  // to open the settings page.
   import { afterUpdate, onMount } from 'svelte';
-  import { agentBusy, agentInfo, chat, nextAgentId } from '../store';
+  import { agentBusy, agentConfig, applyDirective, chat, nextAgentId, settingsOpen } from '../store';
   import { post } from '../vscode';
 
   let text = '';
@@ -11,10 +11,7 @@
   let logEl: HTMLDivElement | undefined;
 
   onMount(() => post({ type: 'getAgentConfig' }));
-
-  // Autoscroll to the bottom after each update. NB: do NOT use a reactive that reads a
-  // bind:this element + schedules a microtask ($: ... queueMicrotask) — in Svelte 4 that
-  // can re-fire every flush and starve the microtask queue, freezing the first paint.
+  // Autoscroll after each update (NOT a reactive + queueMicrotask — that starves the paint).
   afterUpdate(() => {
     if (logEl) logEl.scrollTop = logEl.scrollHeight;
   });
@@ -41,21 +38,35 @@
 </script>
 
 <div class="chat">
-  <div class="chathd">✦ Agent <span class="agentkind">{$agentInfo ? $agentInfo.kind : '…'}</span></div>
+  <div class="chathd">
+    <span>✦ Agent</span>
+    <span class="agentkind">{$agentConfig?.kind ?? '…'}</span>
+    <span class="spacer"></span>
+    <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+    <span class="gear" role="button" tabindex="0" title="Agent settings" on:click={() => settingsOpen.set(true)}>⚙</span>
+  </div>
   <div class="chatlog" bind:this={logEl}>
     {#if !$chat.length}
-      <div class="empty">Ask the agent about your code — it runs your configured CLI ({$agentInfo?.command || 'claude'}).</div>
+      <div class="empty">
+        Ask about your code, or click <b>✦ ask</b> on a function to make it traceable. Runs
+        <code>{$agentConfig?.command || 'claude'}</code>.
+      </div>
     {/if}
     {#each $chat as m}
       <div class="msg {m.role}" class:err={m.error}>
         <div class="who">{m.role === 'user' ? 'you' : '✦'}</div>
-        <div class="text">{m.text}{#if m.streaming}<span class="caret">▋</span>{/if}</div>
+        <div class="text">
+          {m.text}{#if m.streaming}<span class="caret">▋</span>{/if}
+          {#if m.directive}
+            <pre class="dir">{m.directive.text}</pre>
+            <button class="ins" on:click={() => m.directive && applyDirective(m.directive)}>Insert &amp; trace</button>
+          {/if}
+        </div>
       </div>
     {/each}
   </div>
   <div class="chatin">
-    <!-- svelte-ignore a11y-autofocus -->
-    <textarea bind:value={text} on:keydown={onKey} placeholder="Ask the agent…  (Enter to send, Shift+Enter for newline)" rows="2"></textarea>
+    <textarea bind:value={text} on:keydown={onKey} placeholder="Ask the agent…  (Enter to send, Shift+Enter newline)" rows="2"></textarea>
     {#if $agentBusy}
       <button class="stop" on:click={stop}>Stop</button>
     {:else}

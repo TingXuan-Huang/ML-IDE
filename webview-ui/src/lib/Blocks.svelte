@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { caretLine, revealInEditor, structure } from '../store';
+  import { askTrace, caretLine, isDesktop, revealInEditor, structure } from '../store';
   import { post } from '../vscode';
   import type { BlockLine, FunctionBlock } from '@fusion/shared';
 
@@ -15,6 +15,10 @@
     // Call THIS function directly (no __main__, no debugger). The host auto-synthesizes
     // an input and reports the exact call it ran, so the shapes are reproducible.
     if (s) post({ type: 'traceFunction', path: s.path, name: fn.name, line: fn.startLine });
+  }
+  function ask(fn: FunctionBlock): void {
+    // Ask the agent to author a `# fusion:` directive that makes this function traceable.
+    if (s) askTrace(s.path, fn.name, fn.startLine);
   }
   const io = (fn: FunctionBlock) =>
     `in(${fn.params.map((p) => p.name).join(',')})` + (fn.returns ? ` → ${fn.returns}` : '');
@@ -44,6 +48,14 @@
             tabindex="0"
             title="Run this function directly (auto-synthesized input) and fill in shapes — no __main__, no debugger"
             on:click={() => traceFn(fn)}>▶ trace</span>
+        {/if}
+        {#if isDesktop}
+          <span
+            class="fask"
+            role="button"
+            tabindex="0"
+            title="Ask the agent to write a # fusion: directive that makes this traceable"
+            on:click={() => ask(fn)}>✦ ask</span>
         {/if}
       </div>
       {#if fn.traceInput}

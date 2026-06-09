@@ -84,6 +84,16 @@ export type TraceState =
   | { phase: 'error'; message: string }
   | { phase: 'canceled' };
 
+// ---- agent config (wire copy of @fusion/core AgentConfig; keeps the protocol core-free) ----
+export interface AgentConfigWire {
+  kind: string;
+  command: string;
+  args: string[];
+  promptVia: 'stdin' | 'arg';
+  trust: 'review' | 'auto';
+  model?: string;
+}
+
 // ---- host -> webview -----------------------------------------------------------
 export type HostMessage =
   | { type: 'init'; version: number }
@@ -101,7 +111,10 @@ export type HostMessage =
   | { type: 'agentChunk'; id: string; delta: string } // streamed stdout delta
   | { type: 'agentDone'; id: string; text: string } // run finished OK (full text)
   | { type: 'agentError'; id: string; message: string }
-  | { type: 'agentConfig'; kind: string; command: string }; // which agent is configured
+  | { type: 'agentConfig'; config: AgentConfigWire } // the full configured agent (for the settings page)
+  | { type: 'agentTestResult'; id: string; ok: boolean; message: string } // settings "Test" result
+  // trace-assist: the agent proposed a `# fusion:` directive for a function (review mode)
+  | { type: 'directiveProposed'; forFunction: string; path: string; line: number; directive: string; explanation: string };
 
 // ---- webview -> host -----------------------------------------------------------
 export type WebviewMessage =
@@ -118,4 +131,10 @@ export type WebviewMessage =
   // ---- agent ----
   | { type: 'agentPrompt'; id: string; text: string } // user asked the agent something
   | { type: 'agentCancel'; id: string }
-  | { type: 'getAgentConfig' };
+  | { type: 'getAgentConfig' }
+  | { type: 'saveAgentConfig'; config: AgentConfigWire } // settings page saved
+  | { type: 'testAgentConfig'; id: string; config: AgentConfigWire } // settings "Test" — run the unsaved config
+  // trace-assist: ask the agent to author a `# fusion:` directive for a function
+  | { type: 'traceAssist'; id: string; path: string; name: string; line: number }
+  // apply an agent-proposed directive (review mode -> user clicked Insert)
+  | { type: 'insertDirective'; path: string; line: number; text: string };

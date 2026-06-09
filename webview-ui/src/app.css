@@ -21,9 +21,9 @@ body {
 .hint { padding: 2px 8px; color: var(--vscode-descriptionForeground); font-size: 11px; }
 .empty { padding: 20px; color: var(--vscode-descriptionForeground); }
 .empty b { color: var(--vscode-foreground); }
-.body { padding: 6px 0; }
+.body { padding: 6px 0; overflow-x: auto; }
 
-.fn { margin: 2px 8px 8px; border: 1px solid var(--vscode-panel-border); }
+.fn { margin: 2px 8px 8px; border: 1px solid var(--vscode-panel-border); width: max-content; min-width: calc(100% - 16px); }
 .fn.active { border-color: var(--vscode-focusBorder); box-shadow: inset 2px 0 0 var(--vscode-focusBorder); }
 .fnhd { padding: 3px 8px; background: var(--vscode-editorWidget-background);
   color: var(--vscode-symbolIcon-functionForeground, #dcdcaa);
@@ -77,3 +77,42 @@ body {
   color: var(--vscode-button-foreground, #fff); border: none; border-radius: 3px; }
 .chatin button:disabled { opacity: 0.5; cursor: default; }
 .chatin button.stop { background: var(--vscode-inputValidation-errorBackground, #5a1d1d); color: var(--vscode-foreground); }
+
+/* trace-assist + settings */
+.fnhd .fask { cursor: pointer; font-size: 11px; opacity: 0.8; flex: none; color: var(--vscode-textLink-foreground); }
+.fnhd .fask:hover { opacity: 1; color: var(--vscode-textLink-activeForeground); }
+.chathd .gear { cursor: pointer; font-size: 14px; opacity: 0.75; }
+.chathd .gear:hover { opacity: 1; }
+.msg .dir { margin: 5px 0; padding: 6px 8px; background: var(--vscode-editor-background);
+  border: 1px solid var(--vscode-panel-border); border-radius: 3px; white-space: pre-wrap;
+  color: var(--vscode-symbolIcon-functionForeground); font-size: 11px; }
+.msg .ins { cursor: pointer; padding: 3px 10px; background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground); border: none; border-radius: 3px; font-size: 11px; }
+.msg code, .modal code { background: var(--vscode-editor-background); padding: 0 3px; border-radius: 2px; }
+
+.modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex;
+  align-items: center; justify-content: center; z-index: 100; }
+.modal { background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px; padding: 18px 20px; width: 460px; max-width: 90vw; box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
+.modal h2 { margin: 0 0 12px; font-size: 14px; }
+.modal label { display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px;
+  font-size: 11px; color: var(--vscode-descriptionForeground); }
+.modal input, .modal select { background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-panel-border); border-radius: 3px; padding: 4px 6px; font-family: inherit; font-size: 12px; }
+.modal .row { display: flex; gap: 8px; margin-top: 6px; }
+.modal button { padding: 5px 14px; cursor: pointer; background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground); border: none; border-radius: 3px; }
+.modal button.ghost { background: transparent; color: var(--vscode-foreground); border: 1px solid var(--vscode-panel-border); }
+.modal .hint { margin: 12px 0 0; color: var(--vscode-descriptionForeground); font-size: 11px; }
+.modal .sub { color: var(--vscode-descriptionForeground); font-weight: 400; }
+.modal .help { color: var(--vscode-descriptionForeground); font-size: 10.5px; line-height: 1.4; margin-top: 2px; }
+.modal .adv-toggle { cursor: pointer; color: var(--vscode-textLink-foreground); font-size: 11px; margin: 2px 0 10px; user-select: none; }
+.modal .adv-toggle:hover { color: var(--vscode-textLink-activeForeground); }
+.modal .row .spacer { flex: 1; }
+.modal .test { margin: 10px 0 0; font-size: 11px; word-break: break-word; }
+.modal .test.ok { color: var(--vscode-charts-blue, #4daafc); }
+.modal .test.bad { color: var(--vscode-errorForeground); }
+
+/* inline traced shapes rendered as ghost-text in the Monaco editor (global: Monaco's
+   injected spans are outside Svelte's component scope) */
+.fusion-shape { color: var(--vscode-descriptionForeground) !important; opacity: 0.85; font-style: italic; }

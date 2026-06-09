@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { structure, trace, zone } from '../store';
+  import { askTraceFile, isDesktop, structure, trace, zone } from '../store';
   import { post } from '../vscode';
   import Blocks from './Blocks.svelte';
   import Graph from './Graph.svelte';
@@ -42,6 +42,17 @@
   <div class="tab trace" role="button" tabindex="0" on:click={() => post({ type: 'requestTrace', path: '' })}>
     ▶ Trace this file
   </div>
+  {#if isDesktop}
+    <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+    <div
+      class="tab trace"
+      role="button"
+      tabindex="0"
+      title="Ask the agent to make every un-traceable function traceable"
+      on:click={askTraceFile}>
+      ✦ ask
+    </div>
+  {/if}
 </div>
 
 <div class="hint">{status}</div>

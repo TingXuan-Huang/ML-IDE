@@ -6,8 +6,9 @@
   import { get } from 'svelte/store';
   import * as monaco from 'monaco-editor';
   import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
-  import { caretLine, doc, revealTarget } from '../store';
+  import { caretLine, doc, revealTarget, structure } from '../store';
   import { post } from '../vscode';
+  import type { FileStructure } from '@fusion/shared';
 
   // Monaco needs a worker factory. Python uses a synchronous Monarch tokenizer (no
   // language worker), so the basic editor worker covers it; if it ever fails to load,
@@ -19,6 +20,46 @@
   let host: HTMLDivElement;
   let editor: monaco.editor.IStandaloneCodeEditor | undefined;
   let loadedPath: string | null = null;
+  let shapeDecos: monaco.editor.IEditorDecorationsCollection | undefined;
+
+  // Render traced shapes INLINE in the editor: gray ghost-text at each line's end
+  // (changed shapes only, like the Blocks zone) + red markers on crash lines. This lets
+  // big models be read with full code + horizontal scroll, not the narrow Blocks pane.
+  function applyShapes(s: FileStructure): void {
+    if (!editor) return;
+    const model = editor.getModel();
+    if (!model) return;
+    const lastLine = model.getLineCount();
+    const decos: monaco.editor.IModelDeltaDecoration[] = [];
+    const markers: monaco.editor.IMarkerData[] = [];
+    for (const fn of s.functions) {
+      for (const l of fn.lines) {
+        if (l.line < 1 || l.line > lastLine) continue;
+        const changed = l.shapes.filter((x) => x.changed);
+        if (changed.length) {
+          const col = model.getLineMaxColumn(l.line);
+          const text = '   ' + changed.map((x) => `${x.varName}[${x.shape.join(', ')}]`).join('  ');
+          decos.push({
+            range: new monaco.Range(l.line, col, l.line, col),
+            options: { after: { content: text, inlineClassName: 'fusion-shape' } },
+          });
+        }
+        if (l.problem) {
+          markers.push({
+            severity: monaco.MarkerSeverity.Error,
+            message: l.problem.message,
+            startLineNumber: l.line,
+            startColumn: 1,
+            endLineNumber: l.line,
+            endColumn: model.getLineMaxColumn(l.line),
+          });
+        }
+      }
+    }
+    if (!shapeDecos) shapeDecos = editor.createDecorationsCollection();
+    shapeDecos.set(decos);
+    monaco.editor.setModelMarkers(model, 'fusion', markers);
+  }
 
   onMount(() => {
     editor = monaco.editor.create(host, {
@@ -47,6 +88,9 @@
     const model = editor.getModel();
     if (model) monaco.editor.setModelLanguage(model, $doc.language || 'python');
   }
+
+  // Re-apply inline shapes whenever the trace updates for the loaded file.
+  $: if (editor && $structure && $doc && $structure.path === $doc.path) applyShapes($structure);
 
   // Reveal: scroll to a line when the cockpit asks (revealTarget.seq bumps each click).
   $: if (editor && $revealTarget.seq) {
