@@ -24,10 +24,17 @@ body {
 .body { padding: 6px 0; }
 
 .fn { margin: 2px 8px 8px; border: 1px solid var(--vscode-panel-border); }
+.fn.active { border-color: var(--vscode-focusBorder); box-shadow: inset 2px 0 0 var(--vscode-focusBorder); }
 .fnhd { padding: 3px 8px; background: var(--vscode-editorWidget-background);
-  color: var(--vscode-symbolIcon-functionForeground, #dcdcaa); cursor: pointer;
-  display: flex; justify-content: space-between; }
-.fnhd .io { color: var(--vscode-descriptionForeground); }
+  color: var(--vscode-symbolIcon-functionForeground, #dcdcaa);
+  display: flex; align-items: center; gap: 8px; }
+.fnhd .fnname { cursor: pointer; }
+.fnhd .fnname:hover { text-decoration: underline; }
+.fnhd .io { color: var(--vscode-descriptionForeground); flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fnhd .ftrace { cursor: pointer; font-size: 11px; opacity: 0.8; flex: none;
+  color: var(--vscode-textLink-foreground); }
+.fnhd .ftrace:hover { opacity: 1; color: var(--vscode-textLink-activeForeground); }
 .ln { display: flex; justify-content: space-between; padding: 1px 8px; white-space: pre; }
 .ln .sh { color: var(--vscode-descriptionForeground); }
 .ln.changed .sh { color: var(--vscode-foreground); }

@@ -84,6 +84,10 @@ export type TraceState =
 export type HostMessage =
   | { type: 'init'; version: number }
   | { type: 'activeFile'; structure: FileStructure }
+  // openDocument carries the RAW source for the standalone editor (Monaco). Sent only
+  // when a new file is opened — NOT on every structure/trace refresh — so editor text +
+  // cursor survive re-traces. (VS Code host never sends this; it has its own editor.)
+  | { type: 'openDocument'; path: string; text: string; language: string }
   | { type: 'traceState'; state: TraceState }
   | { type: 'callGraph'; graph: CallGraph }
   | { type: 'dataView'; meta: DataMeta }
@@ -94,8 +98,11 @@ export type HostMessage =
 export type WebviewMessage =
   | { type: 'ready' }
   | { type: 'requestTrace'; path: string }
+  | { type: 'traceFunction'; path: string; name: string; line: number }
   | { type: 'cancelTrace' }
   | { type: 'revealSymbol'; path: string; line: number }
+  // Standalone editor saved (Cmd+S) -> host writes to disk + re-structures.
+  | { type: 'saveDocument'; path: string; text: string }
   | { type: 'pickDataFile' }
   | { type: 'setPrimaryZone'; zone: Zone }
   | { type: 'toggleHintDensity' };

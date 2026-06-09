@@ -3,18 +3,16 @@
     "module": "commonjs",
     "target": "ES2020",
     "lib": ["ES2020"],
-    "outDir": "out",
+    "declaration": true,
+    "outDir": "dist",
     "rootDir": "src",
     "types": ["node"],
     "baseUrl": ".",
-    "paths": {
-      "@fusion/shared": ["../shared/dist/index"],
-      "@fusion/core": ["../core/dist/index"]
-    },
+    "paths": { "@fusion/shared": ["../shared/dist/index"] },
     "strict": true,
     "sourceMap": true,
     "skipLibCheck": true
   },
   "include": ["src"],
-  "exclude": ["src/**/*.test.ts", "node_modules", "out"]
+  "exclude": ["src/**/*.test.ts", "node_modules", "dist"]
 }

@@ -1,0 +1,69 @@
+<script lang="ts">
+  // Monaco editor pane for the standalone (Electron) host — VS Code's editor as a
+  // library. This component is DYNAMICALLY imported (App.svelte) only when isDesktop,
+  // so Monaco is code-split into its own chunk and never enters the VS Code bundle.
+  import { onDestroy, onMount } from 'svelte';
+  import { get } from 'svelte/store';
+  import * as monaco from 'monaco-editor';
+  import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
+  import { caretLine, doc, revealTarget } from '../store';
+  import { post } from '../vscode';
+
+  // Monaco needs a worker factory. Python uses a synchronous Monarch tokenizer (no
+  // language worker), so the basic editor worker covers it; if it ever fails to load,
+  // the editor still renders/edits/scrolls (workers power only background services).
+  (self as unknown as { MonacoEnvironment?: unknown }).MonacoEnvironment = {
+    getWorker: () => new editorWorker(),
+  };
+
+  let host: HTMLDivElement;
+  let editor: monaco.editor.IStandaloneCodeEditor | undefined;
+  let loadedPath: string | null = null;
+
+  onMount(() => {
+    editor = monaco.editor.create(host, {
+      value: '',
+      language: 'python',
+      theme: 'vs-dark',
+      automaticLayout: true,
+      minimap: { enabled: false },
+      fontSize: 13,
+      scrollBeyondLastLine: false,
+      renderWhitespace: 'selection',
+      tabSize: 4,
+    });
+    editor.onDidChangeCursorPosition((e) => caretLine.set(e.position.lineNumber));
+    // Cmd/Ctrl+S -> ask the host to write to disk + re-structure.
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+      const d = get(doc);
+      if (d && editor) post({ type: 'saveDocument', path: d.path, text: editor.getValue() });
+    });
+  });
+
+  // Load source when a NEW file opens (path change) — never on re-trace, so edits survive.
+  $: if (editor && $doc && $doc.path !== loadedPath) {
+    loadedPath = $doc.path;
+    editor.setValue($doc.text);
+    const model = editor.getModel();
+    if (model) monaco.editor.setModelLanguage(model, $doc.language || 'python');
+  }
+
+  // Reveal: scroll to a line when the cockpit asks (revealTarget.seq bumps each click).
+  $: if (editor && $revealTarget.seq) {
+    const ln = $revealTarget.line;
+    editor.revealLineInCenter(ln);
+    editor.setPosition({ lineNumber: ln, column: 1 });
+    editor.focus();
+  }
+
+  onDestroy(() => editor?.dispose());
+</script>
+
+<div class="editor" bind:this={host}></div>
+
+<style>
+  .editor {
+    width: 100%;
+    height: 100%;
+  }
+</style>

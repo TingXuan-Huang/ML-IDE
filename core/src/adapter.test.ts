@@ -1,0 +1,75 @@
+import { describe, expect, it } from 'vitest';
+import { toFileStructure, type RawStructure, type RawTrace } from './adapter';
+
+const raw: RawStructure = {
+  path: '/x/model.py',
+  functions: [
+    {
+      name: 'forward',
+      startLine: 1,
+      endLine: 3,
+      params: [{ name: 'self' }, { name: 'x', type: 'Tensor' }],
+      returns: 'Tensor',
+      intermediates: [{ line: 2, name: 'h' }],
+    },
+  ],
+};
+const lines: Record<number, string> = {
+  1: 'def forward(self, x):',
+  2: '    h = self.fc(x)',
+  3: '    return h',
+};
+const getLine = (n: number) => lines[n] ?? '';
+
+describe('toFileStructure', () => {
+  it('maps structure with no trace (no shapes, hasShapes false)', () => {
+    const s = toFileStructure(raw, getLine);
+    expect(s.language).toBe('python');
+    expect(s.hasShapes).toBe(false);
+    expect(s.functions).toHaveLength(1);
+    const fn = s.functions[0];
+    expect(fn.params.map((p) => p.name)).toEqual(['self', 'x']);
+    expect(fn.returns).toBe('Tensor');
+    expect(fn.lines.map((l) => l.text)).toEqual([lines[1], lines[2], lines[3]]);
+    expect(fn.lines.every((l) => l.shapes.length === 0)).toBe(true);
+  });
+
+  it('attaches traced shapes per line with the changed flag', () => {
+    const trace: RawTrace = {
+      records: { '2': { h: { shape: [8, 32], dtype: 'float32', changed: true } } },
+      error: null,
+      crashLine: null,
+    };
+    const s = toFileStructure(raw, getLine, trace);
+    expect(s.hasShapes).toBe(true);
+    const l2 = s.functions[0].lines.find((l) => l.line === 2)!;
+    expect(l2.shapes).toEqual([{ varName: 'h', shape: [8, 32], dtype: 'float32', changed: true }]);
+  });
+
+  it('marks the crash line with a shape-mismatch problem and leaves others clean', () => {
+    const trace: RawTrace = {
+      records: { '2': { h: { shape: [8, 32], dtype: 'float32', changed: true } } },
+      error: 'RuntimeError: mat1 and mat2 shapes cannot be multiplied (8x32 and 64x4)',
+      crashLine: 3,
+    };
+    const fn = toFileStructure(raw, getLine, trace).functions[0];
+    const crashed = fn.lines.find((l) => l.line === 3)!;
+    expect(crashed.problem?.kind).toBe('mismatch');
+    expect(crashed.problem?.message).toContain('cannot be multiplied');
+    expect(fn.lines.find((l) => l.line === 2)!.problem).toBeUndefined();
+  });
+
+  it('marks multiple crash lines from trace_module crashes[]', () => {
+    const trace: RawTrace = {
+      records: {},
+      crashes: [
+        { line: 1, message: 'build Bad(): RuntimeError mismatch' },
+        { line: 3, message: 'Bad.forward: RuntimeError cannot be multiplied' },
+      ],
+    };
+    const fn = toFileStructure(raw, getLine, trace).functions[0];
+    expect(fn.lines.find((l) => l.line === 1)!.problem?.message).toContain('build Bad()');
+    expect(fn.lines.find((l) => l.line === 3)!.problem?.message).toContain('cannot be multiplied');
+    expect(fn.lines.find((l) => l.line === 2)!.problem).toBeUndefined();
+  });
+});

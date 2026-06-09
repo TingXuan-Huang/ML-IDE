@@ -2,19 +2,19 @@
 //
 // Owns CockpitState (active file -> structure, debounced+cached), the editor-area
 // WebviewPanel, the typed message bus, and the HelperClient wiring. The webview is
-// inline HTML for the M1 shell (Svelte is the tracked upgrade — see BUILD_STATUS.md).
+// a Svelte app built to webview-ui/dist, loaded via asWebviewUri (see BUILD_STATUS.md).
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { HelperClient } from './helperClient';
-import type {
-  CallGraph,
-  FileStructure,
-  FunctionBlock,
-  BlockLine,
-  HostMessage,
-  WebviewMessage,
-} from '@fusion/shared';
+import {
+  HelperClient,
+  toFileStructure,
+  moduleTraceToRaw,
+  type RawStructure,
+  type RawTrace,
+  type TraceModuleResult,
+} from '@fusion/core';
+import type { CallGraph, HostMessage, WebviewMessage } from '@fusion/shared';
 
 let panel: vscode.WebviewPanel | undefined;
 let helper: HelperClient | undefined;
@@ -121,6 +121,9 @@ function onMessage(m: WebviewMessage): void {
     case 'requestTrace':
       runTrace();
       break;
+    case 'traceFunction':
+      runTraceFunction(m.name, m.line);
+      break;
     case 'pickDataFile':
       pickDataFile();
       break;
@@ -152,7 +155,7 @@ async function sendStructure(): Promise<void> {
   try {
     const raw = await getHelper().request<RawStructure>('structure_file', { path: p });
     L(`structure: got ${raw.functions?.length ?? 0} functions`);
-    post({ type: 'activeFile', structure: toFileStructure(raw, ed.document, undefined) });
+    post({ type: 'activeFile', structure: toFileStructure(raw, (n) => ed.document.lineAt(n - 1).text, undefined) });
     void sendCallGraph(p);
   } catch (e) {
     L(`structure: ERROR ${errMsg(e)}`);
@@ -172,6 +175,10 @@ async function sendCallGraph(p: string): Promise<void> {
 }
 
 // --- trace (Mode 1, runtime shapes) --------------------------------------------
+// "Trace this file" = trace_module: for every model class + zero-arg function in the
+// file, build-check the constructor and synth-call forward (batch 2). No __main__
+// needed (works on libraries), and the batch matches the per-function "▶ trace" so the
+// two never disagree. Each crashing function shows its own red line.
 async function runTrace(): Promise<void> {
   const ed = lastEditor;
   if (!panel || !ed || ed.document.languageId !== 'python') {
@@ -181,15 +188,56 @@ async function runTrace(): Promise<void> {
   const p = ed.document.uri.fsPath;
   post({ type: 'traceState', state: { phase: 'tracing' } });
   try {
-    const [raw, trace] = await Promise.all([
+    const [raw, mod] = await Promise.all([
       getHelper().request<RawStructure>('structure_file', { path: p }),
-      getHelper().request<RawTrace>('trace_file', { path: p }),
+      getHelper().request<TraceModuleResult>('trace_module', { path: p }),
     ]);
-    post({ type: 'activeFile', structure: toFileStructure(raw, ed.document, trace) });
-    // A caught shape crash is a SUCCESS of the tool (shown inline on the bad line),
-    // not a trace error. Only a rejected helper request (catch below) is a real error.
+    post({
+      type: 'activeFile',
+      structure: toFileStructure(raw, (n) => ed.document.lineAt(n - 1).text, moduleTraceToRaw(mod)),
+    });
+    // Caught shape crashes are a SUCCESS of the tool (shown inline on the bad lines).
     post({ type: 'traceState', state: { phase: 'done', runId: String(Date.now()) } });
+    L(`trace_module: ${mod.notes.length} traced, ${mod.problems.length} problem(s)`);
+    mod.notes.forEach((n) => L(`  • ${n.note}`));
+    const msg = mod.problems.length
+      ? `Fusion ▶ ${mod.problems.length} shape problem(s) — see red lines`
+      : `Fusion ▶ traced ${mod.notes.filter((n) => n.note.includes('randn')).length} function(s), synth batch 2`;
+    vscode.window.setStatusBarMessage(msg, 6000);
   } catch (e) {
+    post({ type: 'traceState', state: { phase: 'error', message: errMsg(e) } });
+  }
+}
+
+// Call ONE function directly (no __main__, no debugger). The helper auto-synthesizes
+// an input and returns `note` = the exact call it ran, so the result is reproducible
+// and the input is never hidden. Empty records (e.g. "needs args") => show the reason.
+async function runTraceFunction(name: string, line: number): Promise<void> {
+  const ed = lastEditor;
+  if (!panel || !ed || ed.document.languageId !== 'python') {
+    vscode.window.showWarningMessage('Open a Python file to trace.');
+    return;
+  }
+  const p = ed.document.uri.fsPath;
+  post({ type: 'traceState', state: { phase: 'tracing', progress: name } });
+  L(`traceFunction: ${name}@${line} in ${p}`);
+  try {
+    const [raw, res] = await Promise.all([
+      getHelper().request<RawStructure>('structure_file', { path: p }),
+      getHelper().request<RawTrace & { note?: string }>('trace_function', { path: p, name, line }),
+    ]);
+    post({ type: 'activeFile', structure: toFileStructure(raw, (n) => ed.document.lineAt(n - 1).text, res) });
+    post({ type: 'traceState', state: { phase: 'done', runId: String(Date.now()) } });
+    const captured = Object.keys(res.records ?? {}).length;
+    L(`traceFunction: note='${res.note ?? ''}' error='${res.error ?? ''}' lines=${captured}`);
+    if (res.note) {
+      // Shapes filled in -> a quiet status line. Nothing captured (couldn't auto-call)
+      // -> a visible info toast so the reason isn't silently swallowed.
+      if (captured > 0) vscode.window.setStatusBarMessage(`Fusion ▶ ${res.note}`, 6000);
+      else vscode.window.showInformationMessage(`Fusion: ${res.note}`);
+    }
+  } catch (e) {
+    L(`traceFunction: ERROR ${errMsg(e)}`);
     post({ type: 'traceState', state: { phase: 'error', message: errMsg(e) } });
   }
 }
@@ -221,55 +269,6 @@ function revealSymbol(p: string, line: number): void {
   });
 }
 
-// --- adapters: helper JSON -> @fusion/shared -----------------------------------
-interface RawStructure {
-  path: string;
-  functions: Array<{
-    name: string;
-    startLine: number;
-    endLine: number;
-    params: Array<{ name: string; type?: string | null }>;
-    returns?: string | null;
-    intermediates: Array<{ line: number; name: string }>;
-  }>;
-}
-interface RawTrace {
-  records: Record<string, Record<string, { shape: number[]; dtype: string; changed: boolean }>>;
-  error: string | null;
-  crashLine: number | null;
-}
-
-function toFileStructure(raw: RawStructure, doc: vscode.TextDocument, trace?: RawTrace): FileStructure {
-  const hasShapes = !!trace && Object.keys(trace.records).length > 0;
-  const functions: FunctionBlock[] = raw.functions.map((fn) => {
-    const lines: BlockLine[] = [];
-    for (let ln = fn.startLine; ln <= fn.endLine; ln++) {
-      const rec = trace?.records[String(ln)];
-      const shapes = rec
-        ? Object.entries(rec).map(([varName, v]) => ({
-            varName,
-            shape: v.shape,
-            dtype: v.dtype,
-            changed: v.changed,
-          }))
-        : [];
-      const problem =
-        trace?.crashLine === ln && trace.error
-          ? { kind: 'mismatch' as const, message: trace.error }
-          : undefined;
-      lines.push({ line: ln, text: doc.lineAt(ln - 1).text, shapes, problem });
-    }
-    return {
-      name: fn.name,
-      startLine: fn.startLine,
-      endLine: fn.endLine,
-      params: fn.params.map((p) => ({ name: p.name, type: p.type ?? undefined })),
-      returns: fn.returns ?? undefined,
-      lines,
-    };
-  });
-  return { path: raw.path, language: 'python', functions, hasShapes };
-}
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);

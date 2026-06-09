@@ -1,0 +1,18 @@
+{
+  "name": "@fusion/core",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Host-agnostic core shared by every Fusion host: the warm-helper JSON-RPC client (lens-helper) and the structure/trace adapter. No vscode, no electron.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "vitest run",
+    "smoke": "tsc -p . && node dist/helperClient.smoke.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  }
+}

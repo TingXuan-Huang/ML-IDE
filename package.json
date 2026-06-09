@@ -1,0 +1,23 @@
+{
+  "name": "fusion",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Fusion — an ML/DS comprehension IDE. A shared core (Python tensor-shape tracer + Svelte cockpit + typed protocol) drives two hosts: a VS Code extension and a standalone Electron desktop app.",
+  "workspaces": [
+    "shared",
+    "core",
+    "webview-ui",
+    "extension",
+    "hosts/desktop"
+  ],
+  "scripts": {
+    "build:shared": "npm run build -w @fusion/shared",
+    "build:core": "npm run build -w @fusion/shared && npm run build -w @fusion/core",
+    "build:ui": "npm run build -w fusion-webview-ui",
+    "build:vscode": "npm run build:core && npm run compile -w fusion-cockpit",
+    "build:desktop": "npm run build:core && npm run build -w @fusion/desktop",
+    "start:desktop": "npm run build:desktop && npm run app -w @fusion/desktop",
+    "test:ui": "npm run test -w @fusion/core",
+    "test:py": "cd lens-helper && python -m pytest tests/ -q"
+  }
+}

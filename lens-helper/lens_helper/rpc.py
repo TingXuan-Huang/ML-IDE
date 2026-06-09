@@ -35,6 +35,17 @@ def handle(method: str, params: Dict[str, Any]) -> Any:
 
         records, error, crash_line = tracer.trace_file(params["path"])
         return {"records": records, "error": error, "crashLine": crash_line}
+    if method == "trace_function":
+        from . import tracer
+
+        records, error, crash_line, note = tracer.trace_function(
+            params["path"], params["name"], int(params.get("line", 0))
+        )
+        return {"records": records, "error": error, "crashLine": crash_line, "note": note}
+    if method == "trace_module":
+        from . import tracer
+
+        return tracer.trace_module(params["path"])  # {records, problems, notes}
     raise ValueError(f"unknown method: {method!r}")
 
 

@@ -24,8 +24,10 @@
   },
   "scripts": {
     "compile": "tsc -p . && npm --prefix ../webview-ui run build",
-    "compile:ext": "tsc -p .",
-    "smoke": "tsc -p . && node out/helperClient.smoke.js"
+    "compile:ext": "tsc -p ."
+  },
+  "dependencies": {
+    "@fusion/core": "*"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

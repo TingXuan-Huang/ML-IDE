@@ -1,5 +1,6 @@
 import { writable } from 'svelte/store';
 import type { CallGraph, DataMeta, FileStructure, HostMessage, TraceState, Zone } from '@fusion/shared';
+import { post } from './vscode';
 
 export const structure = writable<FileStructure | null>(null);
 export const graph = writable<CallGraph | null>(null);
@@ -7,11 +8,33 @@ export const data = writable<DataMeta | null>(null);
 export const trace = writable<TraceState>({ phase: 'idle' });
 export const zone = writable<Zone>('blocks');
 
-/** Apply a message from the extension host to the stores. */
+// --- standalone editor (desktop host only) -------------------------------------
+// True when running inside the Electron host (preload exposed window.fusionHost).
+// In VS Code there's no embedded editor — the host owns it — so the cockpit renders alone.
+export const isDesktop =
+  typeof window !== 'undefined' && !!(window as unknown as { fusionHost?: unknown }).fusionHost;
+
+export const doc = writable<{ path: string; text: string; language: string } | null>(null);
+export const caretLine = writable<number>(0); // 1-based editor caret line -> cockpit highlights its function
+// A bumpable reveal signal: the editor scrolls to `.line` whenever `.seq` changes
+// (a plain line number wouldn't re-fire when you click the same symbol twice).
+export const revealTarget = writable<{ line: number; seq: number }>({ line: 0, seq: 0 });
+let _seq = 0;
+
+/** Reveal a source line: scroll the embedded editor (desktop) or ask the host (VS Code). */
+export function revealInEditor(path: string, line: number): void {
+  if (isDesktop) revealTarget.set({ line, seq: ++_seq });
+  else post({ type: 'revealSymbol', path, line });
+}
+
+/** Apply a message from the host to the stores. */
 export function applyHostMessage(m: HostMessage): void {
   switch (m.type) {
     case 'activeFile':
       structure.set(m.structure);
+      break;
+    case 'openDocument':
+      doc.set({ path: m.path, text: m.text, language: m.language });
       break;
     case 'traceState':
       trace.set(m.state);

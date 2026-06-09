@@ -1,57 +1,52 @@
 <script lang="ts">
-  import { structure, trace, zone } from './store';
-  import { post } from './vscode';
-  import Blocks from './lib/Blocks.svelte';
-  import Graph from './lib/Graph.svelte';
-  import Data from './lib/Data.svelte';
-  import type { Zone } from '@fusion/shared';
+  // Shell selector. Desktop (Electron) host -> a two-pane IDE: Monaco editor | cockpit.
+  // VS Code host -> the cockpit alone (VS Code provides the editor). Monaco is loaded
+  // via a dynamic import so it's code-split and never ships in the VS Code webview.
+  import { isDesktop } from './store';
+  import Cockpit from './lib/Cockpit.svelte';
+  import type { ComponentType } from 'svelte';
 
-  const tabs: Zone[] = ['blocks', 'graph', 'data'];
-  const label = (z: Zone) => z[0].toUpperCase() + z.slice(1);
-
-  function setZone(z: Zone): void {
-    zone.set(z);
-    post({ type: 'setPrimaryZone', zone: z });
-  }
-
-  $: s = $structure;
-  $: problems = s ? s.functions.reduce((n, f) => n + f.lines.filter((l) => l.problem).length, 0) : 0;
-  $: status = (() => {
-    const base = s ? `${s.path.split('/').pop()} · ${s.functions.length} functions` : 'no file';
-    const t =
-      $trace.phase === 'tracing'
-        ? ' · tracing…'
-        : $trace.phase === 'error'
-          ? ` · error: ${'message' in $trace ? $trace.message : ''}`
-          : s && s.hasShapes
-            ? problems
-              ? ` · traced · ✕ ${problems} shape problem${problems > 1 ? 's' : ''}`
-              : ' · traced ✓'
-            : '';
-    return base + t;
-  })();
+  let Editor: ComponentType | null = null;
+  if (isDesktop) void import('./lib/Editor.svelte').then((m) => (Editor = m.default));
 </script>
 
-<div class="tabs">
-  {#each tabs as t}
-    <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-    <div class="tab" class:on={$zone === t} role="tab" tabindex="0" on:click={() => setZone(t)}>{label(t)}</div>
-  {/each}
-  <div class="spacer"></div>
-  <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-  <div class="tab trace" role="button" tabindex="0" on:click={() => post({ type: 'requestTrace', path: '' })}>
-    ▶ Trace this file
+{#if isDesktop}
+  <div class="ide">
+    <div class="pane editor">
+      {#if Editor}
+        <svelte:component this={Editor} />
+      {:else}
+        <div class="loading">Loading editor…</div>
+      {/if}
+    </div>
+    <div class="pane cockpit"><Cockpit /></div>
   </div>
-</div>
+{:else}
+  <Cockpit />
+{/if}
 
-<div class="hint">{status}</div>
-
-<div class="body">
-  {#if $zone === 'blocks'}
-    <Blocks />
-  {:else if $zone === 'graph'}
-    <Graph />
-  {:else}
-    <Data />
-  {/if}
-</div>
+<style>
+  .ide {
+    display: flex;
+    height: 100vh;
+    width: 100vw;
+  }
+  .pane {
+    height: 100%;
+    overflow: hidden;
+  }
+  .pane.editor {
+    flex: 1.5 1 0;
+    min-width: 0;
+    border-right: 1px solid var(--vscode-panel-border);
+  }
+  .pane.cockpit {
+    flex: 1 1 0;
+    min-width: 340px;
+    overflow-y: auto;
+  }
+  .loading {
+    padding: 20px;
+    color: var(--vscode-descriptionForeground);
+  }
+</style>
