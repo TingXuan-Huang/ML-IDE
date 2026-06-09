@@ -24,5 +24,6 @@ if ((window as unknown as { fusionHost?: unknown }).fusionHost) {
 const app = new App({ target: document.getElementById('app')! });
 window.addEventListener('message', (e: MessageEvent<HostMessage>) => applyHostMessage(e.data));
 post({ type: 'ready' });
+if ((window as unknown as { fusionHost?: unknown }).fusionHost) post({ type: 'getTracingConfig' });
 
 export default app;

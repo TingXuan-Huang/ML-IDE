@@ -95,6 +95,15 @@ export interface AgentConfigWire {
   model?: string;
 }
 
+// ---- tracing config (Tracing settings tab) ----
+export interface TracingConfigWire {
+  batch: number; // B in synthesized inputs
+  seq: number; // sequence length for Embedding/RNN synth
+  density: 'changed' | 'all'; // show only changed shapes, or every tensor
+  autoTrace: boolean; // trace a file as soon as it's opened
+  retries: number; // ✦ ask agent<->tracer rounds
+}
+
 // ---- host -> webview -----------------------------------------------------------
 export type HostMessage =
   | { type: 'init'; version: number }
@@ -114,6 +123,7 @@ export type HostMessage =
   | { type: 'agentError'; id: string; message: string }
   | { type: 'agentConfig'; config: AgentConfigWire } // the full configured agent (for the settings page)
   | { type: 'agentTestResult'; id: string; ok: boolean; message: string } // settings "Test" result
+  | { type: 'tracingConfig'; config: TracingConfigWire } // current tracing settings
   // trace-assist: the agent proposed a `# fusion:` directive for a function (review mode)
   | { type: 'directiveProposed'; forFunction: string; path: string; line: number; directive: string; explanation: string };
 
@@ -135,6 +145,8 @@ export type WebviewMessage =
   | { type: 'getAgentConfig' }
   | { type: 'saveAgentConfig'; config: AgentConfigWire } // settings page saved
   | { type: 'testAgentConfig'; id: string; config: AgentConfigWire } // settings "Test" — run the unsaved config
+  | { type: 'getTracingConfig' }
+  | { type: 'saveTracingConfig'; config: TracingConfigWire }
   // trace-assist: ask the agent to author a `# fusion:` directive for a function
   | { type: 'traceAssist'; id: string; path: string; name: string; line: number }
   // apply an agent-proposed directive (review mode -> user clicked Insert)

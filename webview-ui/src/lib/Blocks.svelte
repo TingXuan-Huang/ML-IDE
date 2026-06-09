@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { askTrace, caretLine, isDesktop, revealInEditor, structure } from '../store';
+  import { askTrace, caretLine, density, isDesktop, revealInEditor, structure } from '../store';
   import { post } from '../vscode';
   import type { BlockLine, FunctionBlock } from '@fusion/shared';
 
@@ -25,11 +25,15 @@
   // Auto-trace only data-path methods. Dunders (__init__, __call__, ...) are not a
   // forward pass — synthesizing a tensor input for them is meaningless.
   const canTrace = (fn: FunctionBlock) => !(fn.name.startsWith('__') && fn.name.endsWith('__'));
-  const shapesOf = (l: BlockLine) =>
+  // Density: 'all' shows every tensor; 'changed' (default) only shapes that changed.
+  $: shapesOf = (l: BlockLine): string =>
     l.problem
       ? '✕ shape error'
-      : l.shapes.filter((x) => x.changed).map((x) => `${x.varName}[${x.shape.join(', ')}]`).join('  ');
-  const isChanged = (l: BlockLine) => !!l.problem || l.shapes.some((x) => x.changed);
+      : ($density === 'all' ? l.shapes : l.shapes.filter((x) => x.changed))
+          .map((x) => `${x.varName}[${x.shape.join(', ')}]`)
+          .join('  ');
+  $: isChanged = (l: BlockLine): boolean =>
+    !!l.problem || l.shapes.some((x) => x.changed) || ($density === 'all' && l.shapes.length > 0);
 </script>
 
 {#if !s || !s.functions.length}

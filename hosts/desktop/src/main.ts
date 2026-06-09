@@ -24,7 +24,7 @@ import {
   type RawTrace,
   type TraceModuleResult,
 } from '@fusion/core';
-import type { AgentConfigWire, CallGraph, HostMessage, WebviewMessage } from '@fusion/shared';
+import type { AgentConfigWire, CallGraph, HostMessage, TracingConfigWire, WebviewMessage } from '@fusion/shared';
 
 // hosts/desktop/dist/main.js -> up three to the repo root.
 const REPO = path.resolve(__dirname, '..', '..', '..');
@@ -132,6 +132,7 @@ async function openPython(p: string): Promise<void> {
   } catch (e) {
     console.error('callgraph failed', e);
   }
+  if (loadTracing().autoTrace) void runTrace(); // trace as soon as the file opens
 }
 
 // Editor saved (Cmd+S): write to disk, refresh source lines, re-structure. Shapes go
@@ -164,7 +165,7 @@ async function runTrace(): Promise<void> {
   try {
     const [raw, mod] = await Promise.all([
       getHelper().request<RawStructure>('structure_file', { path: openFile.path }),
-      getHelper().request<TraceModuleResult>('trace_module', { path: openFile.path }),
+      getHelper().request<TraceModuleResult>('trace_module', { path: openFile.path, ...synthParams() }),
     ]);
     send({ type: 'activeFile', structure: toFileStructure(raw, lineAt, moduleTraceToRaw(mod)) });
     send({ type: 'traceState', state: { phase: 'done', runId: String(stamp()) } });
@@ -181,7 +182,7 @@ async function runTraceFunction(name: string, line: number): Promise<void> {
   try {
     const [raw, res] = await Promise.all([
       getHelper().request<RawStructure>('structure_file', { path: openFile.path }),
-      getHelper().request<RawTrace & { note?: string }>('trace_function', { path: openFile.path, name, line }),
+      getHelper().request<RawTrace & { note?: string }>('trace_function', { path: openFile.path, name, line, ...synthParams() }),
     ]);
     const traced: RawTrace = { ...res, notes: res.note ? [{ line, note: res.note }] : [] };
     send({ type: 'activeFile', structure: toFileStructure(raw, lineAt, traced) });
@@ -213,6 +214,31 @@ const stamp = (): number => ++_seq;
 // Config lives at ~/.fusion/agent.json (written by the settings page in a later step);
 // absent => the claude preset. Re-read per run so config edits take effect immediately.
 const AGENT_CONFIG_FILE = path.join(os.homedir(), '.fusion', 'agent.json');
+
+// --- tracing config (Tracing settings tab) -------------------------------------
+const TRACING_CONFIG_FILE = path.join(os.homedir(), '.fusion', 'tracing.json');
+const DEFAULT_TRACING: TracingConfigWire = { batch: 2, seq: 16, density: 'changed', autoTrace: false, retries: 3 };
+function loadTracing(): TracingConfigWire {
+  try {
+    return { ...DEFAULT_TRACING, ...JSON.parse(fs.readFileSync(TRACING_CONFIG_FILE, 'utf8')) };
+  } catch {
+    return { ...DEFAULT_TRACING };
+  }
+}
+function saveTracing(c: TracingConfigWire): void {
+  fs.mkdirSync(path.dirname(TRACING_CONFIG_FILE), { recursive: true });
+  fs.writeFileSync(TRACING_CONFIG_FILE, JSON.stringify(c, null, 2));
+}
+// synth params for the helper, from the saved tracing config.
+const synthParams = (): { batch: number; seq: number } => {
+  const t = loadTracing();
+  return { batch: t.batch, seq: t.seq };
+};
+// Serialize agent runs so file-level ✦ ask doesn't spawn N CLI processes at once.
+let _agentChain: Promise<unknown> = Promise.resolve();
+const queueAgent = (fn: () => Promise<void>): void => {
+  _agentChain = _agentChain.then(fn).catch((e) => console.error('[fusion] agent run failed', e));
+};
 const agentRuns = new Map<string, AbortController>();
 
 // Give the agent the open file as context so answers are about the user's code.
@@ -337,7 +363,7 @@ async function tryDirective(srcLines: string[], line: number, directive: string,
   try {
     const res = await getHelper().request<{ error?: string | null; records?: Record<string, unknown> }>(
       'trace_function',
-      { path: tmp, name, line: 0 }, // line 0 -> find by name (the directive shifted the line)
+      { path: tmp, name, line: 0, ...synthParams() }, // line 0 -> find by name (the directive shifted the line)
     );
     if (res.error) return String(res.error);
     if (!res.records || Object.keys(res.records).length === 0) return 'traced but captured no shapes';
@@ -357,7 +383,7 @@ async function tryDirective(srcLines: string[], line: number, directive: string,
 async function runTraceAssist(id: string, p: string, name: string, line: number): Promise<void> {
   let reason = '';
   try {
-    const res = await getHelper().request<{ note?: string }>('trace_function', { path: p, name, line });
+    const res = await getHelper().request<{ note?: string }>('trace_function', { path: p, name, line, ...synthParams() });
     reason = res.note ?? '';
   } catch {
     /* ignore */
@@ -369,7 +395,7 @@ async function runTraceAssist(id: string, p: string, name: string, line: number)
 
   let directive = '';
   let err: string | null = reason || 'needs an input';
-  const MAX = 3;
+  const MAX = Math.max(1, loadTracing().retries);
   for (let attempt = 0; attempt < MAX; attempt++) {
     const prompt =
       attempt === 0
@@ -433,7 +459,7 @@ async function onMessage(m: WebviewMessage): Promise<void> {
       await saveDocument(m.path, m.text);
       break;
     case 'agentPrompt':
-      await runAgent(m.id, m.text);
+      queueAgent(() => runAgent(m.id, m.text));
       break;
     case 'agentCancel':
       agentRuns.get(m.id)?.abort();
@@ -448,8 +474,16 @@ async function onMessage(m: WebviewMessage): Promise<void> {
     case 'testAgentConfig':
       await testAgentConfig(m.id, m.config as AgentConfig);
       break;
+    case 'getTracingConfig':
+      send({ type: 'tracingConfig', config: loadTracing() });
+      break;
+    case 'saveTracingConfig':
+      saveTracing(m.config);
+      send({ type: 'tracingConfig', config: m.config });
+      if (openFile) void runTrace(); // re-trace with the new batch/seq
+      break;
     case 'traceAssist':
-      await runTraceAssist(m.id, m.path, m.name, m.line);
+      queueAgent(() => runTraceAssist(m.id, m.path, m.name, m.line)); // serialized (file-level ✦ ask)
       break;
     case 'insertDirective':
       await insertDirective(m.path, m.line, m.text);

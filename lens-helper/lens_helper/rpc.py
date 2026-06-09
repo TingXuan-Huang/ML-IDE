@@ -39,13 +39,19 @@ def handle(method: str, params: Dict[str, Any]) -> Any:
         from . import tracer
 
         records, error, crash_line, note = tracer.trace_function(
-            params["path"], params["name"], int(params.get("line", 0))
+            params["path"],
+            params["name"],
+            int(params.get("line", 0)),
+            int(params.get("batch", 2)),
+            int(params.get("seq", 16)),
         )
         return {"records": records, "error": error, "crashLine": crash_line, "note": note}
     if method == "trace_module":
         from . import tracer
 
-        return tracer.trace_module(params["path"])  # {records, problems, notes}
+        return tracer.trace_module(
+            params["path"], int(params.get("batch", 2)), int(params.get("seq", 16))
+        )  # {records, problems, notes, ops}
     raise ValueError(f"unknown method: {method!r}")
 
 

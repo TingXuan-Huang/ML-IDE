@@ -169,32 +169,46 @@ def _required_pos(sig):
     ]
 
 
+# Synthesis dims, settable per trace via the Tracing settings page (batch B, sequence S).
+_SYNTH = {"batch": 2, "seq": 16}
+
+
 def _synth_input(model):
     """Guess an input tensor from the model's first consuming layer — DTYPE-AWARE:
-    Embedding -> long indices, Conv -> image, RNN/LSTM/GRU -> sequence, Linear -> vector."""
+    Embedding -> long indices, Conv -> image, RNN/LSTM/GRU -> sequence, Linear -> vector.
+    The batch B and sequence S come from _SYNTH (the Tracing settings)."""
     import torch
     import torch.nn as nn
 
+    b, s = _SYNTH["batch"], _SYNTH["seq"]
     try:
         mods = list(model.modules())
     except Exception:
         mods = []
     for m in mods:
         if isinstance(m, nn.Embedding):
-            return torch.randint(0, m.num_embeddings, (2, 16)), f"randint(0, {m.num_embeddings}, (2, 16))"
+            return torch.randint(0, m.num_embeddings, (b, s)), f"randint(0, {m.num_embeddings}, ({b}, {s}))"
         if isinstance(m, nn.Linear):
-            return torch.randn(2, m.in_features), f"randn(2, {m.in_features})"
+            return torch.randn(b, m.in_features), f"randn({b}, {m.in_features})"
         if isinstance(m, nn.Conv2d):
-            return torch.randn(2, m.in_channels, 32, 32), f"randn(2, {m.in_channels}, 32, 32)"
+            return torch.randn(b, m.in_channels, 32, 32), f"randn({b}, {m.in_channels}, 32, 32)"
         if isinstance(m, nn.Conv1d):
-            return torch.randn(2, m.in_channels, 32), f"randn(2, {m.in_channels}, 32)"
+            return torch.randn(b, m.in_channels, 32), f"randn({b}, {m.in_channels}, 32)"
         if isinstance(m, nn.Conv3d):
-            return torch.randn(2, m.in_channels, 16, 16, 16), f"randn(2, {m.in_channels}, 16, 16, 16)"
+            return torch.randn(b, m.in_channels, 16, 16, 16), f"randn({b}, {m.in_channels}, 16, 16, 16)"
         if isinstance(m, (nn.RNN, nn.LSTM, nn.GRU)):
             if getattr(m, "batch_first", False):
-                return torch.randn(2, 16, m.input_size), f"randn(2, 16, {m.input_size})"
-            return torch.randn(16, 2, m.input_size), f"randn(16, 2, {m.input_size})"
-    return torch.randn(2, 8), "randn(2, 8) [guess]"
+                return torch.randn(b, s, m.input_size), f"randn({b}, {s}, {m.input_size})"
+            return torch.randn(s, b, m.input_size), f"randn({s}, {b}, {m.input_size})"
+    return torch.randn(b, 8), f"randn({b}, 8) [guess]"
+
+
+def _set_synth(batch, seq):
+    try:
+        _SYNTH["batch"] = max(1, int(batch))
+        _SYNTH["seq"] = max(1, int(seq))
+    except (TypeError, ValueError):
+        pass
 
 
 def _resolve_args(inst, method, method_line, directives, g):
@@ -305,7 +319,7 @@ def _make_invocation(g, name, cls_name, method_line, class_line, directives):
     return _seeded_call(lambda m=method, a=args: m(*a), model=inst), f"{cnote}.{name}({ishape})"
 
 
-def trace_function(path: str, name: str, line: int):
+def trace_function(path: str, name: str, line: int, batch: int = 2, seq: int = 16):
     """Call ONE function/method directly (no __main__, no debugger) and trace it.
     Auto-synthesizes inputs (or honors a `# fusion:` directive).
     Returns (records, error_or_None, crash_line, note)."""
@@ -314,15 +328,25 @@ def trace_function(path: str, name: str, line: int):
     import io
     import os
 
+    _set_synth(batch, seq)
+
     path = os.path.abspath(path)
     src = open(path).read()
-    g = {"__name__": "fusion_traced", "__file__": path}  # NOT __main__ -> the file's main block won't run
+    import sys
+    import types
+    mod = types.ModuleType("fusion_traced")
+    mod.__file__ = path
+    mod.__dict__.update({"__name__": "fusion_traced", "__file__": path})
+    sys.modules["fusion_traced"] = mod
+    g = mod.__dict__
     sink = io.StringIO()
     try:
         with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
             exec(compile(src, path, "exec"), g)  # load defs (and any top-level code)
     except Exception as e:
         return {}, f"module load failed: {type(e).__name__}: {e}", None, ""
+    finally:
+        sys.modules.pop("fusion_traced", None)
 
     directives = _parse_directives(src)
     cls_name, class_line, method_line = _locate(ast.parse(src, path), name, line)
@@ -335,7 +359,7 @@ def trace_function(path: str, name: str, line: int):
     return records, (f"{type(err).__name__}: {err}" if err else None), crash, note
 
 
-def trace_module(path: str):
+def trace_module(path: str, batch: int = 2, seq: int = 16):
     """Comprehensively trace a file WITHOUT needing a __main__.
 
     For every model class and zero-arg function DEFINED in the file:
@@ -353,15 +377,24 @@ def trace_module(path: str):
     import io
     import os
 
+    _set_synth(batch, seq)
     path = os.path.abspath(path)
     src = open(path).read()
-    g = {"__name__": "fusion_traced", "__file__": path}  # __main__ block won't run
+    import sys
+    import types
+    mod = types.ModuleType("fusion_traced")
+    mod.__file__ = path
+    mod.__dict__.update({"__name__": "fusion_traced", "__file__": path})
+    sys.modules["fusion_traced"] = mod
+    g = mod.__dict__
     sink = io.StringIO()
     try:
         with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
             exec(compile(src, path, "exec"), g)
     except Exception as e:
         return {"records": {}, "problems": [{"line": 1, "message": f"module load failed: {type(e).__name__}: {e}"}], "notes": []}
+    finally:
+        sys.modules.pop("fusion_traced", None)
 
     directives = _parse_directives(src)
     tree = ast.parse(src, path)

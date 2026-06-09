@@ -113,6 +113,11 @@ body {
 .modal .test { margin: 10px 0 0; font-size: 11px; word-break: break-word; }
 .modal .test.ok { color: var(--vscode-charts-blue, #4daafc); }
 .modal .test.bad { color: var(--vscode-errorForeground); }
+.modal-tabs { display: flex; gap: 4px; margin: -2px 0 14px; border-bottom: 1px solid var(--vscode-panel-border); }
+.modal-tabs .mtab { padding: 5px 12px; cursor: pointer; color: var(--vscode-tab-inactiveForeground); border-bottom: 2px solid transparent; }
+.modal-tabs .mtab.on { color: var(--vscode-foreground); border-bottom-color: var(--vscode-focusBorder); }
+.modal label.check { flex-direction: row; align-items: center; gap: 6px; color: var(--vscode-foreground); }
+.modal label.check input { width: auto; }
 
 /* inline traced shapes rendered as ghost-text in the Monaco editor (global: Monaco's
    injected spans are outside Svelte's component scope) */

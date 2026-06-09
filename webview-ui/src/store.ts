@@ -1,5 +1,14 @@
-import { get, writable } from 'svelte/store';
-import type { AgentConfigWire, CallGraph, DataMeta, FileStructure, HostMessage, TraceState, Zone } from '@fusion/shared';
+import { derived, get, writable } from 'svelte/store';
+import type {
+  AgentConfigWire,
+  CallGraph,
+  DataMeta,
+  FileStructure,
+  HostMessage,
+  TracingConfigWire,
+  TraceState,
+  Zone,
+} from '@fusion/shared';
 import { post } from './vscode';
 
 export const structure = writable<FileStructure | null>(null);
@@ -96,6 +105,15 @@ export function testAgent(cfg: AgentConfigWire): void {
   post({ type: 'testAgentConfig', id: nextAgentId(), config: cfg });
 }
 
+// --- tracing config (Tracing settings tab) -------------------------------------
+export const tracingConfig = writable<TracingConfigWire | null>(null);
+// Show every tensor vs only changed shapes — read by Blocks + the editor.
+export const density = derived(tracingConfig, ($t) => $t?.density ?? 'changed');
+export function saveTracingConfig(cfg: TracingConfigWire): void {
+  post({ type: 'saveTracingConfig', config: cfg });
+  settingsOpen.set(false);
+}
+
 /** Apply a message from the host to the stores. */
 export function applyHostMessage(m: HostMessage): void {
   switch (m.type) {
@@ -123,6 +141,9 @@ export function applyHostMessage(m: HostMessage): void {
       break;
     case 'agentTestResult':
       agentTest.set({ pending: false, ok: m.ok, message: m.message });
+      break;
+    case 'tracingConfig':
+      tracingConfig.set(m.config);
       break;
     case 'directiveProposed':
       chat.update((ms) => [
