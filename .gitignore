@@ -1,0 +1,14 @@
+node_modules/
+out/
+dist/
+__pycache__/
+*.vsix
+.DS_Store
+
+# tooling artifacts (Claude Code / gstack), not project source
+.claude/
+.gstack/
+
+# stray compiled JS next to TS sources (real build output goes to dist/)
+shared/src/*.js
+shared/src/*.js.map

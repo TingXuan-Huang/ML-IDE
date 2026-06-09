@@ -1,0 +1,17 @@
+[project]
+name = "lens-helper"
+version = "0.0.1"
+description = "Warm Python sidecar for the Fusion IDE cockpit: data-file previews + tensor-shape tracing."
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+# loaders use these when present; degrade gracefully when not
+data = ["numpy", "pandas", "pyarrow"]
+
+[project.scripts]
+lens-helper = "lens_helper.rpc:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"

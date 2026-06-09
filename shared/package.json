@@ -1,0 +1,14 @@
+{
+  "name": "@fusion/shared",
+  "version": "0.0.1",
+  "description": "Shared message protocol + data models for the Fusion IDE host and webview.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc -p . --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  }
+}

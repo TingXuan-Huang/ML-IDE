@@ -1,0 +1,36 @@
+// Smoke test for HelperClient — spawns the real lens-helper and exercises the
+// cross-language bridge + crash recovery. Run: node out/helperClient.smoke.js
+import { HelperClient } from './helperClient';
+
+const HELPER_CWD = '/Users/tingxuanhuang/Desktop/IDE/lens-helper';
+const NPY = '/Users/tingxuanhuang/Desktop/IDE/spike/sampledata/embeddings.npy';
+const CSV = '/Users/tingxuanhuang/Desktop/IDE/spike/sampledata/metrics.csv';
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(() => r(), ms));
+
+async function main(): Promise<void> {
+  const c = new HelperClient({ cwd: HELPER_CWD });
+
+  console.log('ping     ->', JSON.stringify(await c.ping()));
+  console.log('version  ->', JSON.stringify(await c.version()));
+
+  const npy = (await c.loadFile(NPY)) as { kind: string; shape: number[] };
+  console.log('load npy ->', npy.kind, JSON.stringify(npy.shape));
+
+  const csv = (await c.loadFile(CSV)) as { kind: string; header: string[] };
+  console.log('load csv ->', csv.kind, JSON.stringify(csv.header));
+
+  // crash recovery: kill the process, then make another request
+  c.killForTest();
+  await sleep(250);
+  const after = await c.ping();
+  console.log('after-crash ping ->', JSON.stringify(after), '| restarts =', c.restartCount);
+
+  c.dispose();
+  console.log('\nSMOKE OK: bridge works + auto-restarted after a crash');
+}
+
+main().catch((e) => {
+  console.error('SMOKE FAILED:', e);
+  process.exit(1);
+});

@@ -1,0 +1,20 @@
+{
+  "name": "fusion-api-probe",
+  "displayName": "Fusion API Probe (spike)",
+  "description": "M0 throwaway: probe executeHoverProvider + CallHierarchy on the active Python file.",
+  "version": "0.0.1",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      { "command": "fusionSpike.probe", "title": "Fusion Spike: Probe APIs on active file" }
+    ]
+  },
+  "scripts": { "compile": "tsc -p ." },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.5"
+  }
+}

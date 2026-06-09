@@ -1,0 +1,35 @@
+{
+  "name": "fusion-cockpit",
+  "displayName": "Fusion Cockpit",
+  "description": "ML/DS comprehension cockpit for VS Code: trace-driven tensor shapes, function graph, data viz.",
+  "version": "0.0.1",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other", "Visualization"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "fusion.openCockpit", "title": "Fusion: Open Cockpit" },
+      { "command": "fusion.traceFile", "title": "Fusion: Trace this file" }
+    ],
+    "configuration": {
+      "title": "Fusion Cockpit",
+      "properties": {
+        "fusion.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Python interpreter for lens-helper (needs numpy/pandas/torch for trace + data). Empty = auto-detect."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p . && npm --prefix ../webview-ui run build",
+    "compile:ext": "tsc -p .",
+    "smoke": "tsc -p . && node out/helperClient.smoke.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.5"
+  }
+}

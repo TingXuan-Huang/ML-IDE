@@ -1,0 +1,46 @@
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--vscode-editor-font-size, 12px);
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+}
+
+.tabs { display: flex; align-items: stretch; height: 30px;
+  background: var(--vscode-tab-inactiveBackground); border-bottom: 1px solid var(--vscode-panel-border); }
+.tab { display: flex; align-items: center; gap: 6px; padding: 0 14px; cursor: pointer;
+  color: var(--vscode-tab-inactiveForeground); border-right: 1px solid var(--vscode-panel-border); user-select: none; }
+.tab.on { color: var(--vscode-foreground); background: var(--vscode-editor-background);
+  border-bottom: 2px solid var(--vscode-focusBorder); }
+.spacer { flex: 1; }
+.trace { color: var(--vscode-textLink-foreground); cursor: pointer; }
+.trace:hover { color: var(--vscode-textLink-activeForeground); }
+
+.hint { padding: 2px 8px; color: var(--vscode-descriptionForeground); font-size: 11px; }
+.empty { padding: 20px; color: var(--vscode-descriptionForeground); }
+.empty b { color: var(--vscode-foreground); }
+.body { padding: 6px 0; }
+
+.fn { margin: 2px 8px 8px; border: 1px solid var(--vscode-panel-border); }
+.fnhd { padding: 3px 8px; background: var(--vscode-editorWidget-background);
+  color: var(--vscode-symbolIcon-functionForeground, #dcdcaa); cursor: pointer;
+  display: flex; justify-content: space-between; }
+.fnhd .io { color: var(--vscode-descriptionForeground); }
+.ln { display: flex; justify-content: space-between; padding: 1px 8px; white-space: pre; }
+.ln .sh { color: var(--vscode-descriptionForeground); }
+.ln.changed .sh { color: var(--vscode-foreground); }
+.ln.bad { background: var(--vscode-inputValidation-errorBackground); }
+.ln.bad .sh, .prob { color: var(--vscode-errorForeground); }
+.prob { padding: 1px 8px 3px 10px; font-style: italic; }
+
+.gsparse { padding: 4px 8px; color: var(--vscode-descriptionForeground); font-size: 11px; }
+.gnode { cursor: pointer; }
+.gnode rect { fill: var(--vscode-editorWidget-background); stroke: var(--vscode-panel-border); }
+.gnode.focus rect, .gnode:hover rect { stroke: var(--vscode-focusBorder); }
+.gnode text { fill: var(--vscode-foreground); font-size: 12px; font-family: var(--vscode-editor-font-family, monospace); }
+.gedge { stroke: var(--vscode-descriptionForeground); fill: none; opacity: 0.55; }
+
+.hist { display: flex; align-items: flex-end; gap: 1px; height: 64px; padding: 6px 8px 2px; }
+.hbar { flex: 1; background: var(--vscode-charts-blue, var(--vscode-focusBorder)); min-height: 1px; opacity: 0.85; }
