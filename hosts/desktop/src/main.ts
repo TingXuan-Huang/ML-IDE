@@ -273,12 +273,11 @@ const extractDirectives = (text: string): string =>
 
 const traceAssistPrompt = (file: string, src: string, name: string, reason: string): string =>
   [
-    `Our PyTorch shape tracer can't auto-call \`${name}\` in ${file} (reason: ${reason || 'needs an input'}).`,
-    `Write a "# fusion:" directive that makes it traceable:`,
-    `  # fusion: input = <expr>      (forward input; a (a, b) tuple supplies multiple positional args)`,
-    `  # fusion: model = Class(...)  (only if the model needs constructor args)`,
-    `Use torch.randn / torch.randint with realistic shapes and dtypes for THIS model.`,
-    `Reply with ONLY the directive line(s) — no prose, no code fences.`,
+    `Our PyTorch shape tracer can't auto-call \`${name}\` in ${file}. Reason: ${reason || 'needs an input'}.`,
+    `Write a "# fusion:" directive so it traces in ISOLATION:`,
+    `  # fusion: model = <Class>(...)  — construct the class that DEFINES ${name} (NOT a different/outer model), with its real constructor args.`,
+    `  # fusion: input = <expr>        — the argument(s) to ${name}; use a (a, b) tuple if it takes multiple args. Match its parameter list and dtypes exactly (torch.randn / torch.randint).`,
+    `Reply with ONLY the "# fusion:" line(s) — no prose, no code fences.`,
     '',
     '```python',
     src,
@@ -297,19 +296,42 @@ const retryPrompt = (file: string, src: string, name: string, prev: string, erro
     '```',
   ].join('\n');
 
+// Nearest top-level `class …:` above a method line (its def line), or null.
+function classLineFor(lines: string[], methodLine: number): number | null {
+  for (let i = methodLine - 1; i >= 1; i--) {
+    if (/^class\s+\w/.test(lines[i - 1] ?? '')) return i;
+  }
+  return null;
+}
+
+// Place directives at the RIGHT spot so trace_module finds them: `# fusion: model =` goes
+// above the enclosing CLASS (where _pick_directive looks), `# fusion: input =` above the
+// METHOD. Returns a NEW lines array (bottom-up inserts so line numbers don't shift).
+function placeDirectives(lines: string[], methodLine: number, text: string): string[] {
+  const model: string[] = [];
+  const input: string[] = [];
+  for (const d of text.split('\n').map((s) => s.trim()).filter(Boolean)) {
+    if (/^#\s*fusion:\s*model\s*=/.test(d)) model.push(d);
+    else if (/^#\s*fusion:\s*input\s*=/.test(d)) input.push(d);
+  }
+  const out = [...lines];
+  const edits: Array<{ at: number; dirs: string[] }> = [];
+  if (input.length) edits.push({ at: methodLine, dirs: input });
+  if (model.length) edits.push({ at: classLineFor(out, methodLine) ?? methodLine, dirs: model });
+  edits.sort((a, b) => b.at - a.at); // bottom-up
+  for (const e of edits) {
+    const idx = Math.max(0, e.at - 1);
+    const indent = (out[idx] ?? '').match(/^\s*/)?.[0] ?? '';
+    out.splice(idx, 0, ...e.dirs.map((d) => indent + d));
+  }
+  return out;
+}
+
 // Trace a CANDIDATE directive against a temp copy (never touches the user's file) to verify
 // it works. Returns an error string if it still fails, or null if it traced clean.
 let _tmpN = 0;
 async function tryDirective(srcLines: string[], line: number, directive: string, name: string): Promise<string | null> {
-  const lines = [...srcLines];
-  const idx = Math.max(0, line - 1);
-  const indent = (lines[idx] || '').match(/^\s*/)?.[0] ?? '';
-  const dir = directive
-    .split('\n')
-    .map((d) => d.trim())
-    .filter(Boolean)
-    .map((d) => indent + d);
-  lines.splice(idx, 0, ...dir);
+  const lines = placeDirectives(srcLines, line, directive);
   const tmp = path.join(os.tmpdir(), `fusion-try-${process.pid}-${_tmpN++}.py`);
   fs.writeFileSync(tmp, lines.join('\n'), 'utf8');
   try {
@@ -385,18 +407,9 @@ async function runTraceAssist(id: string, p: string, name: string, line: number)
   }
 }
 
-// Write a directive just above `line` (matching indentation), refresh the editor, re-trace.
+// Place directives correctly (model→class, input→method), refresh the editor, re-trace.
 async function insertDirective(p: string, line: number, text: string): Promise<void> {
-  const src = fs.readFileSync(p, 'utf8').split('\n');
-  const idx = Math.max(0, line - 1);
-  const indent = (src[idx] || '').match(/^\s*/)?.[0] ?? '';
-  const dir = text
-    .split('\n')
-    .map((d) => d.trim())
-    .filter(Boolean)
-    .map((d) => indent + d);
-  src.splice(idx, 0, ...dir);
-  const newText = src.join('\n');
+  const newText = placeDirectives(fs.readFileSync(p, 'utf8').split('\n'), line, text).join('\n');
   fs.writeFileSync(p, newText, 'utf8');
   if (openFile && openFile.path === p) openFile.lines = newText.split('\n');
   send({ type: 'openDocument', path: p, text: newText, language: 'python' });
