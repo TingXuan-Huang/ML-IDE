@@ -20,6 +20,15 @@ This file tracks what's built; the design doc is the source of truth.
 | — | Trace also captures **return-value shapes** (`return self.fc2(h)` → `return[8,4]`) via the `return` event | tested `pipeline.py` |
 | NEW | **Trace this function** — call ONE function directly, **no `__main__`, no debugger**: per-function `▶ trace` → helper loads the module (main block won't run), instantiates the class, **auto-synthesizes** an input from the first `Linear`/`Conv` layer, traces just that call, and **always shows the input used** (`note`, e.g. `Encoder().forward(randn(2, 16))`). Empty capture (needs ctor/args) → visible info toast, not silent. | `cd lens-helper && python3 -c "from lens_helper import tracer;print(tracer.trace_function('../spike/sampledata/encoder.py','forward',0)[3])"` → `Encoder().forward(randn(2, 16))` |
 | NEW | **Trace this file** = `trace_module` (replaces `trace_file` in the UI). For EVERY model class + zero-arg function in the file: **build-check** the constructor (catches `__init__` shape errors) + synth-call `forward` with **batch 2** (so file-trace and per-function trace AGREE — no more 8-vs-2). Works on **pure libraries** (no `__main__`). Each crashing function gets its own red line (`problems[]`). `trace_file` (run `__main__`) kept in the helper for a future "Run" action. | `cd lens-helper && python3 -c "from lens_helper import tracer;r=tracer.trace_module('../spike/sampledata/buggy.py');print(r['problems'])"` → `L14 … (2x32 and 64x4)` |
+| NEW | **Input completion** — auto-synth is now **dtype/layer-aware** (Embedding→`randint` long indices, Conv→image, RNN/LSTM/GRU→sequence, Linear→vector). Escape hatch via magic comment directly above a def/class: `# fusion: input = <expr>` (a `(a, b)` tuple → multi-arg) and `# fusion: model = Model(args)` (constructor args). Runs seeded + `.eval()` + `no_grad`. Provenance is **pinned in the cockpit** under each function (the exact call, or a `# fusion:` hint when it can't auto-trace). | `cd lens-helper && python -m pytest tests/ -q` → 23 passed (incl. embedding/dir tests) |
+
+**`# fusion:` directive syntax** (put the comment on the line(s) directly above the target):
+```python
+# fusion: model = Seq2Seq(vocab=500)            # construct a ctor-arg model
+class Seq2Seq(nn.Module):
+    # fusion: input = torch.randint(0, 500, (4, 10))   # exact input (dtype/shape); tuple -> *args
+    def forward(self, tokens): ...
+```
 
 ## How to run the cockpit (F5)
 1. Open the **project ROOT** (`Desktop/IDE`) as the VS Code workspace (so `lens-helper` resolves), OR open `extension/`.

@@ -59,6 +59,12 @@ describe('toFileStructure', () => {
     expect(fn.lines.find((l) => l.line === 2)!.problem).toBeUndefined();
   });
 
+  it('pins a provenance note to its function by def line', () => {
+    const trace: RawTrace = { records: {}, notes: [{ line: 1, note: 'M().forward(randn(2, 8))' }] };
+    const fn = toFileStructure(raw, getLine, trace).functions[0];
+    expect(fn.traceInput).toBe('M().forward(randn(2, 8))');
+  });
+
   it('marks multiple crash lines from trace_module crashes[]', () => {
     const trace: RawTrace = {
       records: {},

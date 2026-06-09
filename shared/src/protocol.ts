@@ -28,6 +28,10 @@ export interface FunctionBlock {
   params: Array<{ name: string; type?: string }>;
   returns?: string;
   lines: BlockLine[];
+  // Provenance pinned by the last trace: the exact call used to produce these shapes
+  // (e.g. "Net().forward(randn(2, 16))"), or a hint when it couldn't auto-trace
+  // (e.g. "forward() needs 2 args — add  # fusion: input = (...)").
+  traceInput?: string;
 }
 
 export interface FileStructure {

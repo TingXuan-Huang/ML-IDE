@@ -145,7 +145,8 @@ async function runTraceFunction(name: string, line: number): Promise<void> {
       getHelper().request<RawStructure>('structure_file', { path: openFile.path }),
       getHelper().request<RawTrace & { note?: string }>('trace_function', { path: openFile.path, name, line }),
     ]);
-    send({ type: 'activeFile', structure: toFileStructure(raw, lineAt, res) });
+    const traced: RawTrace = { ...res, notes: res.note ? [{ line, note: res.note }] : [] };
+    send({ type: 'activeFile', structure: toFileStructure(raw, lineAt, traced) });
     send({ type: 'traceState', state: { phase: 'done', runId: String(stamp()) } });
   } catch (e) {
     send({ type: 'traceState', state: { phase: 'error', message: String(e) } });

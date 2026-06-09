@@ -226,7 +226,8 @@ async function runTraceFunction(name: string, line: number): Promise<void> {
       getHelper().request<RawStructure>('structure_file', { path: p }),
       getHelper().request<RawTrace & { note?: string }>('trace_function', { path: p, name, line }),
     ]);
-    post({ type: 'activeFile', structure: toFileStructure(raw, (n) => ed.document.lineAt(n - 1).text, res) });
+    const traced: RawTrace = { ...res, notes: res.note ? [{ line, note: res.note }] : [] };
+    post({ type: 'activeFile', structure: toFileStructure(raw, (n) => ed.document.lineAt(n - 1).text, traced) });
     post({ type: 'traceState', state: { phase: 'done', runId: String(Date.now()) } });
     const captured = Object.keys(res.records ?? {}).length;
     L(`traceFunction: note='${res.note ?? ''}' error='${res.error ?? ''}' lines=${captured}`);

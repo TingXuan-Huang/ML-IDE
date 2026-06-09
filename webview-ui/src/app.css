@@ -35,6 +35,7 @@ body {
 .fnhd .ftrace { cursor: pointer; font-size: 11px; opacity: 0.8; flex: none;
   color: var(--vscode-textLink-foreground); }
 .fnhd .ftrace:hover { opacity: 1; color: var(--vscode-textLink-activeForeground); }
+.prov { padding: 1px 8px 2px; color: var(--vscode-descriptionForeground); font-size: 11px; opacity: 0.85; }
 .ln { display: flex; justify-content: space-between; padding: 1px 8px; white-space: pre; }
 .ln .sh { color: var(--vscode-descriptionForeground); }
 .ln.changed .sh { color: var(--vscode-foreground); }

@@ -146,14 +146,14 @@ def test_trace_function_forward_no_main(tmp_path):
 def test_trace_function_top_level_zero_arg(tmp_path):
     f = _write(tmp_path, "u.py", "import torch\ndef make():\n    return torch.randn(4, 3)\n")
     records, err, crash, note = tracer.trace_function(f, "make", 2)
-    assert err is None and note == "called make()"
+    assert err is None and note == "make()"
     assert any("return" in rec and rec["return"]["shape"] == [4, 3] for rec in records.values())
 
 
 def test_trace_function_needs_args_reports(tmp_path):
     f = _write(tmp_path, "u.py", "def f(a, b):\n    return a + b\n")
     records, err, crash, note = tracer.trace_function(f, "f", 1)
-    assert records == {} and "needs args" in note
+    assert records == {} and "needs 2 args" in note
 
 
 def test_trace_function_init_does_not_inject_synth_tensor(tmp_path):
@@ -258,3 +258,82 @@ def test_trace_function_multiarg_method_reports(tmp_path):
     )
     records, err, crash, note = tracer.trace_function(f, "step", 5)
     assert records == {} and "needs 2 args" in note
+
+
+# --- input synthesis & directives (completion) ---------------------------------
+def test_synth_embedding_uses_long_indices(tmp_path):
+    # NLP model: first layer is Embedding -> input must be a LongTensor of indices,
+    # NOT randn floats (which would crash). dtype-aware synth handles this.
+    f = _write(
+        tmp_path,
+        "nlp.py",
+        "import torch, torch.nn as nn\n"
+        "class Tagger(nn.Module):\n"
+        "    def __init__(s):\n"
+        "        super().__init__(); s.emb = nn.Embedding(1000, 32); s.fc = nn.Linear(32, 5)\n"
+        "    def forward(s, x):\n"
+        "        h = s.emb(x)\n"
+        "        return s.fc(h)\n",
+    )
+    records, err, crash, note = tracer.trace_function(f, "forward", 0)
+    assert err is None, err
+    assert "randint(0, 1000" in note
+    # embedding output [2, 16, 32] (a named local) is captured; floats would have crashed
+    assert any(any(v["shape"] == [2, 16, 32] for v in rec.values()) for rec in records.values())
+
+
+def test_directive_input_override_multiarg(tmp_path):
+    # forward(x, mask) needs 2 args -> a `# fusion: input =` tuple supplies them (*args).
+    f = _write(
+        tmp_path,
+        "m.py",
+        "import torch, torch.nn as nn\n"
+        "class M(nn.Module):\n"
+        "    def __init__(s):\n"
+        "        super().__init__(); s.fc = nn.Linear(8, 4)\n"
+        "    # fusion: input = (torch.randn(2, 8), torch.ones(2, 8))\n"
+        "    def forward(s, x, mask):\n"
+        "        return s.fc(x * mask)\n",
+    )
+    records, err, crash, note = tracer.trace_function(f, "forward", 0)
+    assert err is None, err
+    assert "randn(2, 8)" in note and "ones(2, 8)" in note
+    assert any(any(v["shape"] == [2, 4] for v in rec.values()) for rec in records.values())
+
+
+def test_directive_model_override_ctor_args(tmp_path):
+    # A model needing constructor args -> `# fusion: model =` builds it for trace_module.
+    f = _write(
+        tmp_path,
+        "cfg.py",
+        "import torch, torch.nn as nn\n"
+        "# fusion: model = Net(16)\n"
+        "class Net(nn.Module):\n"
+        "    def __init__(s, dim):\n"
+        "        super().__init__(); s.fc = nn.Linear(dim, 4)\n"
+        "    def forward(s, x):\n"
+        "        return s.fc(x)\n",
+    )
+    res = tracer.trace_module(f)
+    assert res["problems"] == [], res["problems"]
+    assert any(n["note"].startswith("Net(16)") for n in res["notes"])
+    assert any(any(v["shape"] == [2, 4] for v in rec.values()) for rec in res["records"].values())
+
+
+def test_directive_input_in_trace_module(tmp_path):
+    # trace_module honors a forward input directive (custom shape/dtype).
+    f = _write(
+        tmp_path,
+        "d.py",
+        "import torch, torch.nn as nn\n"
+        "class E(nn.Module):\n"
+        "    def __init__(s):\n"
+        "        super().__init__(); s.emb = nn.Embedding(50, 8)\n"
+        "    # fusion: input = torch.randint(0, 50, (3, 7))\n"
+        "    def forward(s, ids):\n"
+        "        return s.emb(ids)\n",
+    )
+    res = tracer.trace_module(f)
+    assert res["problems"] == [], res["problems"]
+    assert any("randint(0, 50, (3, 7))" in n["note"] for n in res["notes"])
+    assert any(any(v["shape"] == [3, 7, 8] for v in rec.values()) for rec in res["records"].values())

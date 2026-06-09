@@ -21,6 +21,9 @@ export interface RawTrace {
   crashLine?: number | null;
   // Multiple crashes (trace_module traces many functions): one entry per crashing line.
   crashes?: Array<{ line: number; message: string }>;
+  // Provenance per traced function (the exact call used, or a "needs # fusion:" hint),
+  // keyed by the function's def line so it pins to the right block.
+  notes?: Array<{ line: number; note: string }>;
 }
 
 /**
@@ -39,6 +42,9 @@ export function toFileStructure(
   const problemAt = new Map<number, string>();
   if (trace?.crashLine != null && trace.error) problemAt.set(trace.crashLine, trace.error);
   for (const c of trace?.crashes ?? []) problemAt.set(c.line, c.message);
+  // Provenance notes keyed by function def line (pins to fn.startLine below).
+  const noteAt = new Map<number, string>();
+  for (const n of trace?.notes ?? []) noteAt.set(n.line, n.note);
 
   const functions: FunctionBlock[] = raw.functions.map((fn) => {
     const lines: BlockLine[] = [];
@@ -64,6 +70,7 @@ export function toFileStructure(
       params: fn.params.map((p) => ({ name: p.name, type: p.type ?? undefined })),
       returns: fn.returns ?? undefined,
       lines,
+      traceInput: noteAt.get(fn.startLine),
     };
   });
   return { path: raw.path, language: 'python', functions, hasShapes };
@@ -73,10 +80,14 @@ export function toFileStructure(
 export interface TraceModuleResult {
   records: RawTrace['records'];
   problems: Array<{ line: number; message: string }>; // one per crashing function
-  notes: Array<{ label: string; note: string }>; // the exact call used per target (provenance)
+  notes: Array<{ label: string; line: number; note: string }>; // call used per target (provenance)
 }
 
 /** Fold a trace_module result into a RawTrace so toFileStructure can render it. */
 export function moduleTraceToRaw(m: TraceModuleResult): RawTrace {
-  return { records: m.records, crashes: m.problems };
+  return {
+    records: m.records,
+    crashes: m.problems,
+    notes: m.notes.map((n) => ({ line: n.line, note: n.note })),
+  };
 }

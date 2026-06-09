@@ -46,6 +46,9 @@
             on:click={() => traceFn(fn)}>▶ trace</span>
         {/if}
       </div>
+      {#if fn.traceInput}
+        <div class="prov" title="The exact call that produced these shapes">▶ {fn.traceInput}</div>
+      {/if}
       {#each fn.lines as l}
         <div class="ln" class:bad={l.problem} class:changed={isChanged(l)}>
           <span>{l.text}</span><span class="sh">{shapesOf(l)}</span>
