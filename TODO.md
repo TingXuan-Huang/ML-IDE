@@ -60,3 +60,27 @@ Roadmap context: `STANDALONE_PLAN.md` (P0–P8), `AGENT_PLAN.md` (agent v1), `BU
 - editor gutter decorations for shape problems · slim Monaco to python-only (3.3 MB → ~1 MB) ·
   remove redundant `extension/package-lock.json` · tree-sitter no-env structure · CI ·
   per-function ▶ trace could also surface op notes (only trace_module does today).
+
+## Possible future TODOs from review (2026-06-11)
+- **P1: Review gate for durable agent memory.** `# fusion: remember ...` facts from agent
+  replies are currently stored and later injected as high-priority prompt context. Before
+  shipping memory broadly, make remembers pending suggestions that the user approves, edits,
+  or rejects before they become durable facts.
+- **P1: Reset trace state on file changes.** Opening a new file should clear stale `done`
+  trace state, pending file-level `✦ ask`, and any file-specific trace assumptions so the UI
+  cannot treat a newly opened static structure as already traced.
+- **P2: Validate desktop IPC file paths.** `openFileInFolder` and `insertDirective` should
+  resolve paths against the current workspace root and reject absolute or `..` escapes before
+  reading or writing files.
+- **P2: Reload project graph when the opened folder changes.** If the Project tab is already
+  mounted, clearing `projectGraph` on a new folder is not enough; request a fresh graph when
+  the folder root changes, with an in-flight guard.
+- **P2: Track agent busy state by active/queued run count.** File-level `✦ ask` can queue many
+  runs, but the UI uses one boolean. Derive busy/Stop visibility from streaming messages or
+  tracked run ids so the first completion does not hide later active work.
+- **P3: Hydrate Settings from the latest agent config.** The settings modal should request
+  `getAgentConfig` on mount and update its local form once, unless the user has started
+  editing, to avoid saving defaults over an existing config.
+- **P3: Decide nested-function structure policy.** `structure_file` now reports top-level
+  functions and one level of class methods. If dropping nested functions is intentional,
+  document it; if not, switch to an AST visitor that preserves enclosing context.

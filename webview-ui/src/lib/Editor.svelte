@@ -6,7 +6,8 @@
   import { get } from 'svelte/store';
   import * as monaco from 'monaco-editor';
   import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
-  import { caretLine, density, doc, revealTarget, structure } from '../store';
+  import { abstract, caretLine, density, doc, fmtOp, fmtShape, revealTarget, structure } from '../store';
+  import { monacoTheme, theme } from '../theme';
   import { post } from '../vscode';
   import type { FileStructure } from '@fusion/shared';
 
@@ -25,7 +26,7 @@
   // Render traced shapes INLINE in the editor: gray ghost-text at each line's end
   // (changed shapes only, like the Blocks zone) + red markers on crash lines. This lets
   // big models be read with full code + horizontal scroll, not the narrow Blocks pane.
-  function applyShapes(s: FileStructure, dens: 'changed' | 'all'): void {
+  function applyShapes(s: FileStructure, dens: 'changed' | 'all', abst: boolean): void {
     if (!editor) return;
     const model = editor.getModel();
     if (!model) return;
@@ -36,8 +37,8 @@
       for (const l of fn.lines) {
         if (l.line < 1 || l.line > lastLine) continue;
         const shown = dens === 'all' ? l.shapes : l.shapes.filter((x) => x.changed);
-        const parts = shown.map((x) => `${x.varName}[${x.shape.join(', ')}]`);
-        if (l.op) parts.push('∗ ' + l.op);
+        const parts = shown.map((x) => `${x.varName}[${fmtShape(x.shape, s.dimNames, abst)}]`);
+        if (l.op) parts.push('∗ ' + fmtOp(l.op, s.dimNames, abst));
         if (parts.length) {
           const col = model.getLineMaxColumn(l.line);
           decos.push({
@@ -66,7 +67,7 @@
     editor = monaco.editor.create(host, {
       value: '',
       language: 'python',
-      theme: 'vs-dark',
+      theme: monacoTheme(get(theme)),
       automaticLayout: true,
       minimap: { enabled: false },
       fontSize: 13,
@@ -90,8 +91,10 @@
     if (model) monaco.editor.setModelLanguage(model, $doc.language || 'python');
   }
 
-  // Re-apply inline shapes whenever the trace (or density) updates for the loaded file.
-  $: if (editor && $structure && $doc && $structure.path === $doc.path) applyShapes($structure, $density);
+  // Re-apply inline shapes whenever the trace (or density / abstract view) updates for the loaded file.
+  $: if (editor && $structure && $doc && $structure.path === $doc.path) applyShapes($structure, $density, $abstract);
+  // Follow the app's light/dark toggle live.
+  $: if (editor) monaco.editor.setTheme(monacoTheme($theme));
 
   // Reveal: scroll to a line when the cockpit asks (revealTarget.seq bumps each click).
   $: if (editor && $revealTarget.seq) {

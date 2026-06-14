@@ -6,11 +6,13 @@ export interface RawStructure {
   path: string;
   functions: Array<{
     name: string;
+    className?: string | null; // enclosing class for methods (display disambiguation)
     startLine: number;
     endLine: number;
     params: Array<{ name: string; type?: string | null }>;
     returns?: string | null;
     intermediates: Array<{ line: number; name: string }>;
+    shapeReqs?: Array<{ name: string; kind: 'exact' | 'min' | 'free'; rank?: number | null; via?: string | null }>;
   }>;
 }
 
@@ -26,6 +28,8 @@ export interface RawTrace {
   notes?: Array<{ line: number; note: string }>;
   // matmul/broadcast op notes keyed by source line.
   ops?: Record<string, string>;
+  // abstract view: concrete dim VALUE (as string) -> symbol (B/L/D/C/H/W).
+  dims?: Record<string, string>;
 }
 
 /**
@@ -67,15 +71,17 @@ export function toFileStructure(
     }
     return {
       name: fn.name,
+      className: fn.className ?? undefined,
       startLine: fn.startLine,
       endLine: fn.endLine,
       params: fn.params.map((p) => ({ name: p.name, type: p.type ?? undefined })),
       returns: fn.returns ?? undefined,
+      shapeReqs: fn.shapeReqs ?? undefined,
       lines,
       traceInput: noteAt.get(fn.startLine),
     };
   });
-  return { path: raw.path, language: 'python', functions, hasShapes };
+  return { path: raw.path, language: 'python', functions, hasShapes, dimNames: trace?.dims };
 }
 
 /** Shape of the helper's `trace_module` result (whole-file: build-check + synth forward). */
@@ -84,6 +90,7 @@ export interface TraceModuleResult {
   problems: Array<{ line: number; message: string }>; // one per crashing function
   notes: Array<{ label: string; line: number; note: string }>; // call used per target (provenance)
   ops?: Record<string, string>; // matmul/broadcast notes by line
+  dims?: Record<string, string>; // concrete dim value -> symbol (B/L/D…) for the abstract view
 }
 
 /** Fold a trace_module result into a RawTrace so toFileStructure can render it. */
@@ -93,5 +100,6 @@ export function moduleTraceToRaw(m: TraceModuleResult): RawTrace {
     crashes: m.problems,
     notes: m.notes.map((n) => ({ line: n.line, note: n.note })),
     ops: m.ops,
+    dims: m.dims,
   };
 }

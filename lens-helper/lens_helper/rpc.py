@@ -30,28 +30,56 @@ def handle(method: str, params: Dict[str, Any]) -> Any:
         from . import callgraph
 
         return callgraph.callgraph_file(params["path"])
+    # Tracing exec's the user's model + runs its forward — a watchdog hard-kills the helper
+    # if that runs away (infinite loop); the host transparently respawns. See tracer._time_limit.
+    TRACE_TIMEOUT = 60
     if method == "trace_file":
         from . import tracer
 
-        records, error, crash_line = tracer.trace_file(params["path"])
+        with tracer._time_limit(TRACE_TIMEOUT):
+            records, error, crash_line = tracer.trace_file(params["path"])
         return {"records": records, "error": error, "crashLine": crash_line}
     if method == "trace_function":
         from . import tracer
 
-        records, error, crash_line, note = tracer.trace_function(
-            params["path"],
-            params["name"],
-            int(params.get("line", 0)),
-            int(params.get("batch", 2)),
-            int(params.get("seq", 16)),
-        )
-        return {"records": records, "error": error, "crashLine": crash_line, "note": note}
+        with tracer._time_limit(TRACE_TIMEOUT):
+            return tracer.trace_function(
+                params["path"],
+                params["name"],
+                int(params.get("line", 0)),
+                int(params.get("batch", 2)),
+                int(params.get("seq", 16)),
+                params.get("projectRoot", ""),
+            )  # {records, error, crashLine, note, ops, dims}
     if method == "trace_module":
         from . import tracer
 
-        return tracer.trace_module(
-            params["path"], int(params.get("batch", 2)), int(params.get("seq", 16))
-        )  # {records, problems, notes, ops}
+        with tracer._time_limit(TRACE_TIMEOUT):
+            return tracer.trace_module(
+                params["path"], int(params.get("batch", 2)), int(params.get("seq", 16)), params.get("projectRoot", "")
+            )  # {records, problems, notes, ops, dims}
+    if method == "module_summary":
+        from . import tracer
+
+        with tracer._time_limit(TRACE_TIMEOUT):
+            return tracer.module_summary(
+                params["path"], int(params.get("batch", 2)), int(params.get("seq", 16)), params.get("projectRoot", "")
+            )  # {target, rows, totalParams, trainableParams, paramBytes, dims, error}
+    if method == "paper_module":
+        from . import tracer
+
+        with tracer._time_limit(TRACE_TIMEOUT):
+            return tracer.paper_module(
+                params["path"], int(params.get("batch", 2)), int(params.get("seq", 16)), params.get("projectRoot", "")
+            )  # {path, sections, dims, problems}
+    if method == "list_folder":
+        from . import project
+
+        return project.list_python_files(params["path"])  # {root, files}
+    if method == "project_graph":
+        from . import project
+
+        return project.project_graph(params["path"])  # {root, files, focus, nodes, edges, sparse}
     raise ValueError(f"unknown method: {method!r}")
 
 
