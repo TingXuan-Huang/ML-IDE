@@ -289,7 +289,7 @@ def _eval_expr(expr: str, g: dict):
     ns.setdefault("torch", torch)
     for nm in ("randn", "randint", "zeros", "ones", "arange", "tensor", "full", "rand", "randn_like"):
         ns.setdefault(nm, getattr(torch, nm))
-    ns.setdefault("load", _make_loader(g.get("__fusion_root__", "")))
+    ns.setdefault("load", _make_loader(_LOAD["root"]))
     return eval(expr, ns)
 
 
@@ -339,6 +339,9 @@ def _required_pos(sig):
 
 # Synthesis dims, settable per trace via the Tracing settings page (batch B, sequence S).
 _SYNTH = {"batch": 2, "seq": 16}
+# Project root for load("relpath") directives. Module-level (traces are sequential, single
+# RPC at a time) instead of stashed in the user module's globals — keeps that namespace clean.
+_LOAD = {"root": ""}
 
 
 def _synth_input(model, rank_hint=None):
@@ -573,7 +576,7 @@ def trace_function(path: str, name: str, line: int, batch: int = 2, seq: int = 1
     mod.__dict__.update({"__name__": "fusion_traced", "__file__": path})
     sys.modules["fusion_traced"] = mod
     g = mod.__dict__
-    g["__fusion_root__"] = project_root or os.path.dirname(path)  # load() resolves rel paths here
+    _LOAD["root"] = project_root or os.path.dirname(path)  # where load("rel") directives resolve from
     sink = io.StringIO()
     try:
         try:
@@ -636,7 +639,7 @@ def trace_module(path: str, batch: int = 2, seq: int = 16, project_root: str = "
     mod.__dict__.update({"__name__": "fusion_traced", "__file__": path})
     sys.modules["fusion_traced"] = mod
     g = mod.__dict__
-    g["__fusion_root__"] = project_root or os.path.dirname(path)  # load() resolves rel paths here
+    _LOAD["root"] = project_root or os.path.dirname(path)  # where load("rel") directives resolve from
     sink = io.StringIO()
     try:
         try:
@@ -689,11 +692,8 @@ def trace_module(path: str, batch: int = 2, seq: int = 16, project_root: str = "
                 if not callable(method):
                     continue
                 fwd_line = _method_line(node, "forward")
-                fwd_node = next((s for s in node.body
-                                 if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef)) and s.name == "forward"), None)
                 try:
-                    rank_hint = _rank_hint_for(inst, fwd_node, hints)
-                    args, ishape = _resolve_args(inst, method, fwd_line, directives, g, rank_hint)
+                    args, ishape, _fwd_node = _resolve_forward(inst, method, node, fwd_line, directives, hints, g)
                 except _CannotInvoke as e:
                     notes.append({"label": f"{node.name}.forward", "line": fwd_line, "note": str(e)})
                     continue
@@ -741,7 +741,7 @@ def trace_module(path: str, batch: int = 2, seq: int = 16, project_root: str = "
 def _exec_module(path: str, project_root: str):
     """Exec a file into a fresh `fusion_traced` module (registered in sys.modules so registry
     decorators resolve). Returns (g, src, load_error). CALLER must pop sys.modules in a
-    finally. Sets g['__fusion_root__'] for load()-based real-input directives."""
+    finally. Sets _LOAD['root'] for load()-based real-input directives."""
     import contextlib
     import io
     import os
@@ -755,7 +755,7 @@ def _exec_module(path: str, project_root: str):
     mod.__dict__.update({"__name__": "fusion_traced", "__file__": path})
     sys.modules["fusion_traced"] = mod
     g = mod.__dict__
-    g["__fusion_root__"] = project_root or os.path.dirname(path)
+    _LOAD["root"] = project_root or os.path.dirname(path)
     sink = io.StringIO()
     try:
         with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
@@ -765,13 +765,26 @@ def _exec_module(path: str, project_root: str):
         return g, src, e
 
 
+def _resolve_forward(inst, method, node, fwd_line, directives, hints, g):
+    """(args, ishape, fwd_node) for a model's forward, honoring `# fusion: input =` and the
+    rank hint. Raises _CannotInvoke if the input can't be resolved (multi-arg + no directive,
+    bad directive, …). Shared by trace_module and _build_class — one place owns the
+    forward-input resolution rule. The caller supplies fwd_line so it can still attribute a
+    note on failure without recomputing it."""
+    import ast
+
+    fwd_node = next((s for s in node.body if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef)) and s.name == "forward"), None)
+    rank_hint = _rank_hint_for(inst, fwd_node, hints)
+    args, ishape = _resolve_args(inst, method, fwd_line, directives, g, rank_hint)
+    return args, ishape, fwd_node
+
+
 def _build_class(node, g, directives, hints):
     """Build a model ClassDef instance + resolve its forward input (NO tracing). Returns
     (inst, method, args, ishape, cnote, fwd_node, fwd_line) or raises _CannotInvoke when the
     class can't be auto-built (ctor args + no `# fusion: model =`, no forward, multi-arg
     forward + no `# fusion: input =`, …). Reused by module_summary / paper_module so
     trace_module's own build path stays untouched."""
-    import ast
     import inspect
 
     cls = g.get(node.name)
@@ -789,10 +802,8 @@ def _build_class(node, g, directives, hints):
     method = getattr(inst, "forward", None)
     if not callable(method):
         raise _CannotInvoke(f"{node.name} has no forward()")
-    fwd_node = next((s for s in node.body if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef)) and s.name == "forward"), None)
     fwd_line = _method_line(node, "forward")
-    rank_hint = _rank_hint_for(inst, fwd_node, hints)
-    args, ishape = _resolve_args(inst, method, fwd_line, directives, g, rank_hint)
+    args, ishape, fwd_node = _resolve_forward(inst, method, node, fwd_line, directives, hints, g)
     return inst, method, args, ishape, cnote, fwd_node, fwd_line
 
 
@@ -893,21 +904,36 @@ def module_summary(path: str, batch: int = 2, seq: int = 16, project_root: str =
         directives = _parse_directives(src)
         tree = ast.parse(src, path)
         hints = _rank_hints(tree)
-        # Build EVERY auto-buildable model class and pick the one with the most parameters —
-        # the composed top-level model dominates its sub-blocks, so we summarize the real
-        # network rather than the first helper class defined in the file.
-        candidates = []
-        build_err = None
-        for node in tree.body:
-            if not isinstance(node, ast.ClassDef):
-                continue
-            try:
-                built = _build_class(node, g, directives, hints)
-                candidates.append((sum(p.numel() for p in built[0].parameters()), built))
-            except _CannotInvoke as e:
-                build_err = str(e)
-            except Exception as e:
-                build_err = f"{type(e).__name__}: {e}"
+        classes = [n for n in tree.body if isinstance(n, ast.ClassDef)]
+        # Summarize the COMPOSED top-level model, not a sub-block. Statically find the
+        # "root" classes — those NOT instantiated by another class in the file — and build
+        # only those (cheap: avoids constructing every sub-block). Fall back to all classes
+        # if no root is buildable. Among the built, pick the one with the most parameters.
+        names = {n.name for n in classes}
+        instantiated = {
+            sub.func.id
+            for n in classes
+            for sub in ast.walk(n)
+            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) and sub.func.id in names and sub.func.id != n.name
+        }
+        roots = [n for n in classes if n.name not in instantiated]
+
+        def build_all(nodes):
+            out, err = [], None
+            for node in nodes:
+                try:
+                    built = _build_class(node, g, directives, hints)
+                    out.append((sum(p.numel() for p in built[0].parameters()), built))
+                except _CannotInvoke as e:
+                    err = str(e)
+                except Exception as e:
+                    err = f"{type(e).__name__}: {e}"
+            return out, err
+
+        candidates, build_err = build_all(roots)
+        if not candidates:  # roots needed ctor args / failed -> try the rest
+            candidates, err2 = build_all([n for n in classes if n not in roots])
+            build_err = err2 or build_err  # keep the roots' reason if the fallback had none
         if not candidates:
             return {**empty, "error": build_err or "no auto-buildable model class found"}
         candidates.sort(key=lambda c: c[0])
