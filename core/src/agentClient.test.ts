@@ -43,6 +43,41 @@ describe('AgentClient', () => {
     await expect(c.run('x')).rejects.toThrow();
   });
 
+  it('inactivity timeout fires on a hung (silent) process', async () => {
+    const c = new AgentClient({
+      kind: 'custom',
+      command: process.execPath,
+      args: ['-e', 'setTimeout(() => {}, 3000)'], // sleeps, never writes
+      promptVia: 'stdin',
+      timeoutMs: 150,
+    });
+    await expect(c.run('x')).rejects.toThrow(/no output|timed out/);
+  });
+
+  it('streaming output keeps re-arming the idle timer (slow model must NOT time out)', async () => {
+    // Emits '.' every 80ms x4 (~320ms total) — never a 200ms gap, so the 200ms inactivity
+    // timeout must NOT fire even though total runtime exceeds it. This is the 120B-model fix.
+    const c = new AgentClient({
+      kind: 'custom',
+      command: process.execPath,
+      args: ['-e', 'let n=0;const t=setInterval(()=>{process.stdout.write(".");if(++n>=4){clearInterval(t);process.exit(0);}},80)'],
+      promptVia: 'stdin',
+      timeoutMs: 200,
+    });
+    expect(await c.run('x')).toBe('....');
+  });
+
+  it('timeoutMs 0 disables the timeout', async () => {
+    const c = new AgentClient({
+      kind: 'custom',
+      command: process.execPath,
+      args: ['-e', 'setTimeout(() => process.stdout.write("ok"), 250)'], // silent 250ms, then output
+      promptVia: 'stdin',
+      timeoutMs: 0,
+    });
+    expect(await c.run('x')).toBe('ok');
+  });
+
   it('config round-trips through disk; default is the claude preset', () => {
     expect(defaultAgentConfig().kind).toBe('claude');
     const file = path.join(os.tmpdir(), `fusion-agent-${process.pid}.json`);

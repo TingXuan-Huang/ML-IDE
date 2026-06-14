@@ -1,8 +1,9 @@
 <script lang="ts">
-  // Shell. Desktop -> [editor | cockpit | chat] with draggable splitters; VS Code -> cockpit alone.
-  import { isDesktop, settingsOpen } from './store';
+  // Shell. Desktop -> [explorer? | editor | cockpit | chat] with draggable splitters; VS Code -> cockpit alone.
+  import { folder, isDesktop, pickFolder, settingsOpen } from './store';
   import Cockpit from './lib/Cockpit.svelte';
   import Chat from './lib/Chat.svelte';
+  import FileTree from './lib/FileTree.svelte';
   import Settings from './lib/Settings.svelte';
   import type { ComponentType } from 'svelte';
 
@@ -51,6 +52,16 @@
 
 {#if isDesktop}
   <div class="ide" bind:this={ideEl}>
+    {#if $folder}
+      <div class="pane explorer">
+        <div class="exhd" title={$folder.root}>
+          <span class="exname">{$folder.root.split('/').pop()}</span>
+          <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+          <span class="exopen" role="button" tabindex="0" title="Open another folder" on:click={pickFolder}>⊞</span>
+        </div>
+        <div class="extree"><FileTree /></div>
+      </div>
+    {/if}
     <div class="pane editor" style="flex: {editorFlex} 1 0">
       {#if Editor}
         <svelte:component this={Editor} />
@@ -86,6 +97,39 @@
   }
   .pane.cockpit {
     overflow-y: auto;
+  }
+  .pane.explorer {
+    flex: 0 0 220px;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--vscode-panel-border);
+    background: var(--vscode-tab-inactiveBackground);
+  }
+  .exhd {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    font-weight: 600;
+    border-bottom: 1px solid var(--vscode-panel-border);
+  }
+  .exhd .exname {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .exhd .exopen {
+    cursor: pointer;
+    opacity: 0.7;
+  }
+  .exhd .exopen:hover {
+    opacity: 1;
+  }
+  .extree {
+    flex: 1;
+    overflow: auto;
+    padding: 4px 0;
   }
   .splitter {
     flex: 0 0 5px;

@@ -16,12 +16,18 @@ export interface AgentConfig {
   promptVia: 'stdin' | 'arg'; // how the prompt reaches the agent
   trust?: 'review' | 'auto'; // how agent-suggested directives are applied (default 'review')
   model?: string; // optional model; for claude/codex we append `--model <model>`
+  // INACTIVITY timeout (ms): kill the run only after this long with NO new output. Big
+  // local models (e.g. a 120B) stream slowly but steadily — an idle timeout tolerates a
+  // long total runtime while still catching a hung process. 0 = no timeout. Default 300s.
+  timeoutMs?: number;
 }
+
+export const DEFAULT_AGENT_TIMEOUT_MS = 300_000;
 
 export interface AgentRunOptions {
   onChunk?: (delta: string) => void; // streamed stdout deltas (for the chat transcript)
   signal?: AbortSignal; // cancel a run
-  timeoutMs?: number; // default 120s
+  timeoutMs?: number; // inactivity timeout override; else cfg.timeoutMs; else 300s. 0 = none
   mockResponse?: string; // kind==='mock' only (tests / no-CLI dev)
 }
 
@@ -104,7 +110,25 @@ export class AgentClient {
       let out = '';
       let err = '';
       let settled = false;
-      const to = opts.timeoutMs ?? 120_000;
+      // Inactivity timeout: re-armed on every chunk, so a slow-but-streaming model keeps
+      // running. 0 disables it. Config value wins; opts is an override (mainly for tests).
+      const to = opts.timeoutMs ?? this.cfg.timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const armIdle = (): void => {
+        if (!to) return; // no timeout
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          proc.kill();
+          finish(() =>
+            reject(
+              new Error(
+                `agent produced no output for ${Math.round(to / 1000)}s — timed out. ` +
+                  `Raise or disable the timeout in Settings → Agent for slow local models.`,
+              ),
+            ),
+          );
+        }, to);
+      };
       const onAbort = (): void => {
         proc.kill();
         finish(() => reject(new Error('agent aborted')));
@@ -119,10 +143,7 @@ export class AgentClient {
         cleanup();
         fn();
       };
-      const timer = setTimeout(() => {
-        proc.kill();
-        finish(() => reject(new Error(`agent timed out after ${to}ms`)));
-      }, to);
+      armIdle(); // start the clock (covers slow time-to-first-token too)
 
       if (opts.signal) {
         if (opts.signal.aborted) {
@@ -136,6 +157,7 @@ export class AgentClient {
       proc.stdout?.on('data', (d) => {
         const s = String(d);
         out += s;
+        armIdle(); // output arrived -> reset the inactivity clock
         opts.onChunk?.(s);
       });
       proc.stderr?.on('data', (d) => (err += String(d)));

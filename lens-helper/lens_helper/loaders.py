@@ -9,6 +9,80 @@ from typing import Any, Dict
 
 MAX_ROWS = 200          # rows transported for display
 MAX_CELLS = 2_000_000   # guard against materializing a huge array for stats
+MAX_TENSOR_BYTES = 256_000_000  # real-input trace: refuse to load a file bigger than this
+
+
+def _to_f32(arr):
+    """Cast float64 -> float32 (most layers expect float32); leave int/bool as-is so
+    Embedding index inputs keep their long/int dtype."""
+    import numpy as np
+
+    return arr.astype("float32") if np.issubdtype(arr.dtype, np.floating) else arr
+
+
+def load_tensor(path: str, root: str = "") -> Any:
+    """Load a real data file into a torch tensor (or dict/tuple/object) for REAL-INPUT
+    tracing — the `load("relpath")` callable exposed inside `# fusion:` directives.
+    Resolves a relative path against `root` (the opened project folder, else the traced
+    file's dir). Raises (FileNotFoundError / ValueError) on missing/too-big/unsupported —
+    the caller surfaces it as a clean directive-failed note, never a crash."""
+    p = path if os.path.isabs(path) else os.path.join(root or os.getcwd(), path)
+    p = os.path.abspath(p)
+    if not os.path.exists(p):
+        raise FileNotFoundError(f"data file not found: {path}")
+    size = os.path.getsize(p)
+    if size > MAX_TENSOR_BYTES:  # checked BEFORE reading -> never OOMs the warm helper
+        raise ValueError(f"file too big: {size} bytes > {MAX_TENSOR_BYTES} cap — slice it in the directive, e.g. load('{path}')[:4]")
+    ext = os.path.splitext(p)[1].lower()
+    import torch
+
+    if ext == ".npy":
+        import numpy as np
+
+        return torch.from_numpy(_to_f32(np.load(p)))
+    if ext == ".npz":
+        import numpy as np
+
+        # The on-disk getsize check above can't catch a COMPRESSED npz that decompresses to
+        # GBs. Sum the uncompressed nbytes from each entry's .npy header (cheap — no full
+        # decompress) and reject before materializing. Falls back to a permissive load if the
+        # header API ever changes.
+        try:
+            import zipfile
+            from numpy.lib import format as npfmt
+
+            uncompressed = 0
+            with zipfile.ZipFile(p) as zf:
+                for nm in zf.namelist():
+                    if not nm.endswith(".npy"):
+                        continue
+                    with zf.open(nm) as fh:
+                        ver = npfmt.read_magic(fh)
+                        shape, _fortran, dt = npfmt._read_array_header(fh, ver)
+                        uncompressed += int(np.prod(shape)) * dt.itemsize
+            if uncompressed > MAX_TENSOR_BYTES:
+                raise ValueError(f"npz uncompresses to {uncompressed} bytes > {MAX_TENSOR_BYTES} cap — slice it in the directive")
+        except (KeyError, AttributeError, OSError):
+            pass  # header peek unavailable -> trust the getsize cap above
+        z = np.load(p)
+        return {k: torch.from_numpy(_to_f32(z[k])) for k in z.files}
+    if ext in (".pt", ".pth"):
+        # weights_only=True -> never unpickles arbitrary objects (no code execution from a
+        # checkpoint). A full pickled model fails this and surfaces as a clean note. A
+        # state_dict/dict is returned raw so the directive can index it: load("x.pt")["x"].
+        obj = torch.load(p, map_location="cpu", weights_only=True)
+        if isinstance(obj, torch.Tensor) and obj.dtype == torch.float64:
+            return obj.float()
+        return obj
+    if ext in (".csv", ".tsv"):
+        import pandas as pd
+
+        df = pd.read_csv(p, sep="\t" if ext == ".tsv" else ",")
+        num = df.select_dtypes(include="number")
+        if num.shape[1] == 0:
+            raise ValueError("csv has no numeric columns to make a tensor")
+        return torch.tensor(num.values.astype("float32"))
+    raise ValueError(f"unsupported data extension '{ext}' (use .npy / .npz / .pt / .pth / .csv)")
 
 
 def load_file(path: str) -> Dict[str, Any]:

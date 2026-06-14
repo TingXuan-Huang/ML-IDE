@@ -1,12 +1,16 @@
 <script lang="ts">
-  import { askTraceFile, isDesktop, structure, trace, zone } from '../store';
+  import { askTraceFile, folder, isDesktop, structure, trace, zone } from '../store';
   import { post } from '../vscode';
   import Blocks from './Blocks.svelte';
   import Graph from './Graph.svelte';
   import Data from './Data.svelte';
+  import ProjectGraph from './ProjectGraph.svelte';
+  import ModelSummary from './ModelSummary.svelte';
+  import PaperView from './PaperView.svelte';
   import type { Zone } from '@fusion/shared';
 
-  const tabs: Zone[] = ['blocks', 'graph', 'data'];
+  // Summary (#2) + Paper (#8) are per-file; Project (#3) needs an opened folder.
+  $: tabs = ['blocks', 'graph', 'summary', 'paper', 'data', ...($folder ? ['project'] : [])] as Zone[];
   const label = (z: Zone) => z[0].toUpperCase() + z.slice(1);
 
   function setZone(z: Zone): void {
@@ -23,10 +27,12 @@
         ? ' · tracing…'
         : $trace.phase === 'error'
           ? ` · error: ${'message' in $trace ? $trace.message : ''}`
-          : s && s.hasShapes
+          : $trace.phase === 'done'
             ? problems
               ? ` · traced · ✕ ${problems} shape problem${problems > 1 ? 's' : ''}`
-              : ' · traced ✓'
+              : s && s.hasShapes
+                ? ' · traced ✓'
+                : ' · traced · 0 shapes — ✦ ask to add inputs'
             : '';
     return base + t;
   })();
@@ -62,6 +68,12 @@
     <Blocks />
   {:else if $zone === 'graph'}
     <Graph />
+  {:else if $zone === 'summary'}
+    <ModelSummary />
+  {:else if $zone === 'paper'}
+    <PaperView />
+  {:else if $zone === 'project'}
+    <ProjectGraph />
   {:else}
     <Data />
   {/if}

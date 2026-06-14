@@ -1,4 +1,5 @@
 :root { color-scheme: dark; }
+:root[data-theme="light"] { color-scheme: light; }
 * { box-sizing: border-box; }
 body {
   margin: 0;
@@ -36,6 +37,7 @@ body {
   color: var(--vscode-textLink-foreground); }
 .fnhd .ftrace:hover { opacity: 1; color: var(--vscode-textLink-activeForeground); }
 .prov { padding: 1px 8px 2px; color: var(--vscode-descriptionForeground); font-size: 11px; opacity: 0.85; }
+.reqs { padding: 1px 8px 2px; color: var(--vscode-charts-yellow, #d7ba7d); font-size: 11px; opacity: 0.9; }
 .ln { display: flex; justify-content: space-between; padding: 1px 8px; white-space: pre; }
 .ln .sh { color: var(--vscode-descriptionForeground); }
 .ln.changed .sh { color: var(--vscode-foreground); }
@@ -55,9 +57,24 @@ body {
 .hbar { flex: 1; background: var(--vscode-charts-blue, var(--vscode-focusBorder)); min-height: 1px; opacity: 0.85; }
 
 /* agent chat sidebar */
-.chat { display: flex; flex-direction: column; height: 100%; }
+.chat { display: flex; flex-direction: column; height: 100%; position: relative; }
 .chathd { padding: 6px 10px; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border);
   background: var(--vscode-tab-inactiveBackground); display: flex; align-items: center; gap: 8px; }
+.chathd .gear.on { opacity: 1; color: var(--vscode-focusBorder); }
+
+/* conversation history dropdown */
+.history { position: absolute; top: 32px; right: 6px; left: 6px; z-index: 20; max-height: 50%;
+  overflow-y: auto; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px; box-shadow: 0 6px 20px rgba(0,0,0,0.35); }
+.history .empty { padding: 10px; }
+.hrow { display: flex; align-items: center; gap: 8px; padding: 5px 9px; cursor: pointer;
+  border-bottom: 1px solid var(--vscode-panel-border); }
+.hrow:last-child { border-bottom: none; }
+.hrow:hover { background: var(--vscode-tab-inactiveBackground); }
+.hrow .htitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hrow .htime { flex: none; font-size: 10.5px; color: var(--vscode-descriptionForeground); }
+.hrow .hdel { flex: none; opacity: 0.5; font-size: 11px; }
+.hrow .hdel:hover { opacity: 1; color: var(--vscode-errorForeground); }
 .chathd .agentkind { font-weight: 400; font-size: 11px; color: var(--vscode-descriptionForeground);
   border: 1px solid var(--vscode-panel-border); border-radius: 3px; padding: 0 5px; }
 .chatlog { flex: 1; overflow-y: auto; padding: 6px 0; }
@@ -118,7 +135,88 @@ body {
 .modal-tabs .mtab.on { color: var(--vscode-foreground); border-bottom-color: var(--vscode-focusBorder); }
 .modal label.check { flex-direction: row; align-items: center; gap: 6px; color: var(--vscode-foreground); }
 .modal label.check input { width: auto; }
+.modal .memarea { min-height: 160px; resize: vertical; line-height: 1.5; white-space: pre;
+  background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-panel-border); border-radius: 3px; padding: 6px 8px;
+  font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; }
 
 /* inline traced shapes rendered as ghost-text in the Monaco editor (global: Monaco's
    injected spans are outside Svelte's component scope) */
 .fusion-shape { color: var(--vscode-descriptionForeground) !important; opacity: 0.85; font-style: italic; }
+
+/* file explorer (open-a-folder) */
+.tnode { padding: 1px 8px 1px 6px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tnode:hover { background: var(--vscode-editorWidget-background); }
+.tdir { color: var(--vscode-foreground); }
+.tdir .tcaret { display: inline-block; width: 12px; color: var(--vscode-descriptionForeground); }
+.tfile { padding-left: 18px; color: var(--vscode-descriptionForeground); }
+.tfile.on { color: var(--vscode-foreground); background: var(--vscode-editorWidget-background);
+  box-shadow: inset 2px 0 0 var(--vscode-focusBorder); }
+.tchildren { padding-left: 12px; }
+
+/* cross-file import graph — node-link diagram */
+.pgbar { display: flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 11px;
+  color: var(--vscode-descriptionForeground); border-bottom: 1px solid var(--vscode-panel-border); }
+.pgbar .spacer { flex: 1; }
+.pgbar button { cursor: pointer; min-width: 22px; padding: 1px 6px; background: var(--vscode-editorWidget-background);
+  color: var(--vscode-foreground); border: 1px solid var(--vscode-panel-border); border-radius: 3px; }
+.pgbar button:hover { border-color: var(--vscode-focusBorder); }
+.pgbar .pgzoom { min-width: 38px; text-align: center; }
+.pgcanvas { overflow: auto; height: calc(100vh - 104px); }
+.pgedge { fill: none; stroke: var(--vscode-descriptionForeground); opacity: 0.4; stroke-width: 1.2; }
+.pgedge.on { stroke: var(--vscode-focusBorder); opacity: 0.95; stroke-width: 1.8; }
+.pgarrowhead { fill: var(--vscode-descriptionForeground); }
+.pgn { cursor: pointer; }
+.pgn rect { fill: var(--vscode-editorWidget-background); stroke: var(--vscode-panel-border); }
+.pgn:hover rect { stroke: var(--vscode-focusBorder); }
+.pgn.focus rect { stroke: var(--vscode-focusBorder); stroke-width: 2; }
+.pgn text { fill: var(--vscode-foreground); font-size: 12px; text-anchor: middle;
+  font-family: var(--vscode-editor-font-family, monospace); pointer-events: none; }
+.pgn.dim { opacity: 0.32; }
+
+/* #2 model summary table */
+.msum { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.msum th { text-align: left; padding: 3px 8px; color: var(--vscode-descriptionForeground);
+  border-bottom: 1px solid var(--vscode-panel-border); font-weight: 600; position: sticky; top: 0;
+  background: var(--vscode-editor-background); }
+.msum th.num, .msum td.num { text-align: right; white-space: nowrap; }
+.msum td { padding: 2px 8px; white-space: nowrap; }
+.msum tbody tr:hover { background: var(--vscode-editorWidget-background); }
+.msum .mname { color: var(--vscode-foreground); overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
+.msum .mcls { color: var(--vscode-symbolIcon-functionForeground); }
+.msum .mshape { color: var(--vscode-descriptionForeground); }
+.msum .share { width: 150px; }
+.sharecell { display: flex; align-items: center; gap: 6px; }
+.sharecell .pct { min-width: 42px; text-align: right; color: var(--vscode-descriptionForeground); }
+.sharecell .hbar { height: 8px; border-radius: 2px; }
+.msum-foot { padding: 6px 8px; color: var(--vscode-foreground); font-size: 11px;
+  border-top: 1px solid var(--vscode-panel-border); }
+
+/* #8 paper-reading view */
+.paperbar { display: flex; align-items: center; gap: 8px; padding: 4px 10px;
+  border-bottom: 1px solid var(--vscode-panel-border); }
+.paperbar .spacer { flex: 1; }
+.paperbar button.ghost { cursor: pointer; padding: 2px 10px; font-size: 11px;
+  background: transparent; color: var(--vscode-textLink-foreground);
+  border: 1px solid var(--vscode-panel-border); border-radius: 3px; }
+.paperbar button.ghost:hover:not(:disabled) { border-color: var(--vscode-focusBorder); }
+.paperbar button.ghost:disabled { opacity: 0.5; cursor: default; }
+.paper { padding: 4px 0; }
+.paper-sec { margin: 4px 8px 10px; }
+.paper-h { padding: 3px 6px; cursor: pointer; color: var(--vscode-symbolIcon-functionForeground);
+  border-left: 2px solid var(--vscode-focusBorder); }
+.paper-h:hover { background: var(--vscode-editorWidget-background); }
+.paper-h .paper-note { color: var(--vscode-descriptionForeground); font-size: 11px; }
+.paper-step { padding: 1px 8px 1px 16px; white-space: pre-wrap; color: var(--vscode-descriptionForeground); }
+.paper-step.changed { color: var(--vscode-foreground); }
+.paper-step .lhs { color: var(--vscode-foreground); }
+.paper-step .rhs { color: var(--vscode-charts-blue, #4daafc); font-style: italic; }
+.paper-prose { margin: 8px; border: 1px solid var(--vscode-panel-border); border-radius: 4px;
+  background: var(--vscode-editorWidget-background); }
+.paper-prose.err { border-color: var(--vscode-errorForeground); }
+.paper-prose-h { padding: 4px 8px; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border);
+  display: flex; align-items: center; gap: 8px; }
+.paper-prose-h .prose-stop { cursor: pointer; font-size: 11px; font-weight: 400;
+  color: var(--vscode-errorForeground); }
+.paper-prose-body { padding: 8px; white-space: pre-wrap; line-height: 1.5; }
+.paper-prose.err .paper-prose-body { color: var(--vscode-errorForeground); }
