@@ -639,30 +639,16 @@ def trace_function(path: str, name: str, line: int, batch: int = 2, seq: int = 1
     annotations and dim-symbol map as trace_module, so a per-function ▶ trace gets
     matmul/reshape notes and the abstract view too."""
     import ast
-    import contextlib
-    import io
     import os
+    import sys
 
     _set_synth(batch, seq)
-
-    path = os.path.abspath(path)
-    src = open(path).read()
-    import sys
-    import types
-    mod = types.ModuleType("fusion_traced")
-    mod.__file__ = path
-    mod.__dict__.update({"__name__": "fusion_traced", "__file__": path})
-    sys.modules["fusion_traced"] = mod
-    g = mod.__dict__
-    _LOAD["root"] = project_root or os.path.dirname(path)  # where load("rel") directives resolve from
-    sink = io.StringIO()
+    path = os.path.abspath(path)  # match _exec_module's co_filename so trace_callable keeps our frames
+    g, src, load_err = _exec_module(path, project_root)  # fresh fusion_traced module; caller pops it
     try:
-        try:
-            with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
-                exec(compile(src, path, "exec"), g)  # load defs (and any top-level code)
-        except Exception as e:
-            return {"records": {}, "error": f"module load failed: {type(e).__name__}: {e}",
-                    "crashLine": None, "note": "", "ops": {}, "dims": {}}
+        if load_err is not None:
+            return {"records": {}, "error": f"module load failed: {type(load_err).__name__}: {load_err}",
+                    "crashLine": None, "note": "", "ops": {}, "dims": {}, "nonFinite": None}
 
         directives = _parse_directives(src)
         tree = ast.parse(src, path)
@@ -703,29 +689,16 @@ def trace_module(path: str, batch: int = 2, seq: int = 16, project_root: str = "
        "notes":    [{"label","line","note"}]}   # note = exact call used (provenance)
     """
     import ast
-    import contextlib
     import inspect
-    import io
     import os
+    import sys
 
     _set_synth(batch, seq)
-    path = os.path.abspath(path)
-    src = open(path).read()
-    import sys
-    import types
-    mod = types.ModuleType("fusion_traced")
-    mod.__file__ = path
-    mod.__dict__.update({"__name__": "fusion_traced", "__file__": path})
-    sys.modules["fusion_traced"] = mod
-    g = mod.__dict__
-    _LOAD["root"] = project_root or os.path.dirname(path)  # where load("rel") directives resolve from
-    sink = io.StringIO()
+    path = os.path.abspath(path)  # match _exec_module's co_filename so trace_callable keeps our frames
+    g, src, load_err = _exec_module(path, project_root)  # fresh fusion_traced module; caller pops it
     try:
-        try:
-            with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
-                exec(compile(src, path, "exec"), g)
-        except Exception as e:
-            return {"records": {}, "problems": [{"line": 1, "message": f"module load failed: {type(e).__name__}: {e}"}], "notes": [], "ops": {}, "dims": {}}
+        if load_err is not None:
+            return {"records": {}, "problems": [{"line": 1, "message": f"module load failed: {type(load_err).__name__}: {load_err}"}], "notes": [], "ops": {}, "dims": {}}
 
         directives = _parse_directives(src)
         tree = ast.parse(src, path)
