@@ -8,6 +8,7 @@ export { toFileStructure, moduleTraceToRaw } from './adapter';
 export type { RawStructure, RawTrace, TraceModuleResult } from './adapter';
 export { AgentClient, AGENT_PRESETS, defaultAgentConfig, coerceAgentConfig, loadAgentConfig, saveAgentConfig } from './agentClient';
 export type { AgentKind, AgentConfig, AgentRunOptions } from './agentClient';
+export { classLineFor, placeDirectives } from './directives';
 export { parseRemembers, stripRememberLines, appendMemoryFact, memoryPromptBlock } from './memory';
 export { formatTranscript } from './conversation';
 export type { Turn } from './conversation';
