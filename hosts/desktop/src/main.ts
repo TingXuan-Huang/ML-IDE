@@ -15,6 +15,7 @@ import * as os from 'os';
 import {
   HelperClient,
   AgentClient,
+  coerceAgentConfig,
   loadAgentConfig,
   saveAgentConfig,
   toFileStructure,
@@ -333,8 +334,8 @@ async function pickDataFile(): Promise<void> {
   });
   if (r.canceled || !r.filePaths[0]) return;
   try {
-    const meta = await getHelper().request('load_file', { path: r.filePaths[0] });
-    send({ type: 'dataView', meta: meta as never });
+    const meta = await getHelper().loadFile(r.filePaths[0]); // validated into DataMeta at the boundary
+    send({ type: 'dataView', meta });
   } catch (e) {
     send({ type: 'traceState', state: { phase: 'error', message: String(e) } });
   }
@@ -763,11 +764,11 @@ async function onMessage(m: WebviewMessage): Promise<void> {
       send({ type: 'agentConfig', config: toWire(loadAgentConfig(AGENT_CONFIG_FILE)) });
       break;
     case 'saveAgentConfig':
-      saveAgentConfig(AGENT_CONFIG_FILE, m.config as AgentConfig);
+      saveAgentConfig(AGENT_CONFIG_FILE, coerceAgentConfig(m.config));
       send({ type: 'agentConfig', config: m.config });
       break;
     case 'testAgentConfig':
-      await testAgentConfig(m.id, m.config as AgentConfig);
+      await testAgentConfig(m.id, coerceAgentConfig(m.config));
       break;
     case 'getTracingConfig':
       send({ type: 'tracingConfig', config: loadTracing() });

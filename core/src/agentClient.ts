@@ -46,6 +46,31 @@ export function defaultAgentConfig(): AgentConfig {
   return { ...AGENT_PRESETS.claude };
 }
 
+/** Validate a wire agent-config (kind/promptVia arrive as `string`) into a real AgentConfig,
+ *  falling back to safe defaults on bad input. This value drives a child-process spawn, so it
+ *  must not be widened by an unchecked `as AgentConfig` cast at the host boundary. */
+export function coerceAgentConfig(wire: {
+  kind?: unknown;
+  command?: unknown;
+  args?: unknown;
+  promptVia?: unknown;
+  trust?: unknown;
+  model?: unknown;
+  timeoutMs?: unknown;
+}): AgentConfig {
+  const kind: AgentKind = wire.kind === 'claude' || wire.kind === 'codex' || wire.kind === 'mock' ? wire.kind : 'custom';
+  const base = AGENT_PRESETS[kind];
+  return {
+    kind,
+    command: typeof wire.command === 'string' ? wire.command : base.command,
+    args: Array.isArray(wire.args) ? wire.args.filter((a): a is string => typeof a === 'string') : [...base.args],
+    promptVia: wire.promptVia === 'stdin' || wire.promptVia === 'arg' ? wire.promptVia : base.promptVia,
+    trust: wire.trust === 'auto' || wire.trust === 'review' ? wire.trust : 'review',
+    ...(typeof wire.model === 'string' ? { model: wire.model } : {}),
+    ...(typeof wire.timeoutMs === 'number' ? { timeoutMs: wire.timeoutMs } : {}),
+  };
+}
+
 const DEFAULT_MOCK = '# fusion: input = torch.randn(2, 8)\n';
 
 /** Load the agent config from a JSON file, falling back to the default (claude preset). */

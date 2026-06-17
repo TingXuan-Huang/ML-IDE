@@ -6,6 +6,27 @@
 // so it is unit-testable with plain Node (see helperClient.smoke.ts).
 import { spawn, ChildProcess } from 'child_process';
 import * as readline from 'readline';
+import type { DataMeta } from '@fusion/shared';
+
+const DATA_KINDS = new Set<DataMeta['kind']>(['table', 'ndarray', 'image', 'unknown']);
+
+/** Validate a raw `load_file` RPC payload into a typed DataMeta at the trust boundary. If the
+ *  Python loaders drift (missing/renamed `kind`), degrade to a visible 'unknown' rather than
+ *  feed the typed union malformed data — the one place this protocol crossed the boundary
+ *  unchecked (was `meta as never`). */
+export function toDataMeta(raw: unknown, path: string): DataMeta {
+  const o = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const p = typeof o.path === 'string' ? o.path : path;
+  if (typeof o.kind === 'string' && DATA_KINDS.has(o.kind as DataMeta['kind'])) {
+    return {
+      ...(o as unknown as DataMeta),
+      path: p,
+      kind: o.kind as DataMeta['kind'],
+      rowSample: typeof o.rowSample === 'number' ? o.rowSample : 0,
+    };
+  }
+  return { path: p, kind: 'unknown', rowSample: 0, note: 'unrecognized data payload from helper' };
+}
 
 export interface HelperOptions {
   python?: string; // interpreter (from the ms-python env API in the real extension)
@@ -88,8 +109,9 @@ export class HelperClient {
   version(): Promise<{ name: string; version: string; protocol: number }> {
     return this.request('version');
   }
-  loadFile(path: string): Promise<Record<string, unknown>> {
-    return this.request('load_file', { path });
+  /** Load + preview a data file, validated into a typed DataMeta at the boundary. */
+  loadFile(path: string): Promise<DataMeta> {
+    return this.request('load_file', { path }).then((raw) => toDataMeta(raw, path));
   }
 
   /** Force-kill the process under the client (test hook). */

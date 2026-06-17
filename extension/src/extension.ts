@@ -251,10 +251,8 @@ async function pickDataFile(): Promise<void> {
   });
   if (!picked?.[0] || !panel) return;
   try {
-    const meta = await getHelper().request<Record<string, unknown>>('load_file', {
-      path: picked[0].fsPath,
-    });
-    post({ type: 'dataView', meta: meta as never });
+    const meta = await getHelper().loadFile(picked[0].fsPath); // validated into DataMeta at the boundary
+    post({ type: 'dataView', meta });
   } catch (e) {
     post({ type: 'traceState', state: { phase: 'error', message: errMsg(e) } });
   }
