@@ -136,8 +136,9 @@ Design docs and history: `STANDALONE_PLAN.md` (the desktop plan), `BUILD_STATUS.
 
 ## Build & run
 
-Prerequisites: **Node 18+** and **Python 3.10+** with `torch` and `numpy` available on the
-interpreter the helper uses (the tracer duck-types tensors; your model code brings its own torch).
+Prerequisites: **Node 18+** and **Python 3.10+**. At runtime the helper duck-types tensors and
+imports `torch` lazily (your model code brings its own torch); the test suite, however, imports
+torch directly, so install the `test` extra before running the Python tests.
 
 ```bash
 npm install
@@ -149,8 +150,9 @@ npm run start:desktop
 npm run build:vscode
 
 # Tests
-npm run test:ui        # vitest over @fusion/core (adapter, client, memory, ...)
-npm run test:py        # pytest over lens-helper (tracer, compare, project, ...)
+npm run test:ui                       # vitest over @fusion/core (adapter, client, memory, ...)
+pip install -e 'lens-helper[test]'    # one-time: pytest + torch + numpy/pandas/pyarrow
+npm run test:py                       # pytest over lens-helper (tracer, compare, project, ...)
 ```
 
 Then open a Python model (e.g. `spike/sampledata/demo_model.py`), click **▶ Trace this file**, and

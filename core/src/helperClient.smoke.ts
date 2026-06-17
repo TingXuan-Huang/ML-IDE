@@ -1,10 +1,14 @@
 // Smoke test for HelperClient — spawns the real lens-helper and exercises the
-// cross-language bridge + crash recovery. Run: node out/helperClient.smoke.js
+// cross-language bridge + crash recovery. Run: node dist/helperClient.smoke.js
+import * as path from 'path';
 import { HelperClient } from './helperClient';
 
-const HELPER_CWD = '/Users/tingxuanhuang/Desktop/IDE/lens-helper';
-const NPY = '/Users/tingxuanhuang/Desktop/IDE/spike/sampledata/embeddings.npy';
-const CSV = '/Users/tingxuanhuang/Desktop/IDE/spike/sampledata/metrics.csv';
+// Paths are derived from this compiled file's location (core/dist/), so the smoke test runs on
+// any clone, not just the author's machine: repo root is two levels up from core/dist/.
+const REPO = path.resolve(__dirname, '..', '..');
+const HELPER_CWD = path.join(REPO, 'lens-helper');
+const NPY = path.join(REPO, 'spike', 'sampledata', 'embeddings.npy');
+const CSV = path.join(REPO, 'spike', 'sampledata', 'metrics.csv');
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(() => r(), ms));
 

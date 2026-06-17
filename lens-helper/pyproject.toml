@@ -2,12 +2,15 @@
 name = "lens-helper"
 version = "0.0.1"
 description = "Warm Python sidecar for the Fusion IDE cockpit: data-file previews + tensor-shape tracing."
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
 # loaders use these when present; degrade gracefully when not
 data = ["numpy", "pandas", "pyarrow"]
+# full dev/test deps: the test suite hard-imports torch (at runtime torch stays the USER's, and
+# the helper imports it lazily). Install with `pip install -e 'lens-helper[test]'`, then pytest.
+test = ["pytest", "torch", "numpy", "pandas", "pyarrow"]
 
 [project.scripts]
 lens-helper = "lens_helper.rpc:main"
