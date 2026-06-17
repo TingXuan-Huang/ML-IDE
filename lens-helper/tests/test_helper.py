@@ -1297,3 +1297,25 @@ def test_compare_flags_op_difference_in_a_chain(tmp_path):
     b = _write(tmp_path, "chain_b.py", head + "        y = h.permute(1, 0)\n        return y\n")
     res = tracer.compare_traces(a, b)
     assert res["matched"][0]["diverges"] is True, res["matched"][0]
+
+
+def test_nan_cache_catches_in_place_mutation(tmp_path):
+    # The per-name NaN cache keys on torch _version, so a tensor that is clean on early lines and
+    # then turns NaN via an IN-PLACE op (same object/id) is STILL flagged (a plain id-cache would
+    # wrongly suppress it).
+    f = _write(
+        tmp_path,
+        "inplace.py",
+        "import torch, torch.nn as nn\n"
+        "class N(nn.Module):\n"
+        "    # fusion: input = torch.zeros(3)\n"
+        "    def forward(s, x):\n"
+        "        h = x.clone()\n"
+        "        h.add_(1.0)\n"   # clean, same object, _version bumped
+        "        h.mul_(0.0)\n"   # [0,0,0], same object
+        "        h.div_(h)\n"     # 0/0 in-place -> NaN, same id, _version bumped again
+        "        return h\n",
+    )
+    nf = tracer.trace_module(f)["nonFinite"]
+    assert nf is not None, "in-place NaN must still be caught (cache keys on _version, not just id)"
+    assert nf["kind"] == "nan"

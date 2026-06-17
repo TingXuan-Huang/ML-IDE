@@ -29,19 +29,6 @@ def _device_str(val: Any) -> str:
     return "" if d is None else str(d).replace("torch.", "")
 
 
-def _nbytes(val: Any, shape: Tuple[int, ...]) -> int:
-    """Memory footprint = numel × element_size. Works for torch (.element_size) and numpy
-    (.itemsize); 0 if it can't be determined."""
-    try:
-        n = 1
-        for d in shape:
-            n *= int(d)
-        es = val.element_size() if hasattr(val, "element_size") else int(getattr(val, "itemsize", 0))
-        return int(n * es)
-    except Exception:
-        return 0
-
-
 # Cap the NaN reduction so a single huge activation can't dominate a line's trace cost.
 _FINITE_CAP = 8_000_000
 
@@ -88,13 +75,48 @@ def trace_callable(fn: Callable[[], Any], target_file: str, diag: Optional[dict]
     prev_line: Dict[int, Optional[int]] = {}
     last_shape: Dict[str, Tuple[int, ...]] = {}
     crash_line: list = [None]  # first (deepest) exception line == the real crash site
+    # Per-NAME caches keyed by the live object so a persistent local isn't re-measured / re-NaN-
+    # checked on every line (the dominant per-line cost). Name-scoped (not a global id set) so a
+    # freed-then-reused id can't cause a cross-name miss; the NaN key also folds in torch _version
+    # so an in-place mutation to NaN is still caught.
+    meta_cache: Dict[str, tuple] = {}  # name -> (id(val), dtype, device, elem_size)
+    nan_clean: Dict[str, tuple] = {}   # name -> (id(val), _version) last checked finite
 
-    def _sentinel(val: Any, shape: Tuple[int, ...], lineno: int, name: str) -> None:
+    def _meta(name: str, val: Any) -> tuple:
+        """(dtype, device, elem_size) for val — immutable per tensor object, so recomputed only
+        when this name's object changes."""
+        vid = id(val)
+        m = meta_cache.get(name)
+        if m is None or m[0] != vid:
+            try:
+                es = val.element_size() if hasattr(val, "element_size") else int(getattr(val, "itemsize", 0))
+            except Exception:
+                es = 0
+            m = (vid, str(getattr(val, "dtype", "")).replace("torch.", ""), _device_str(val), es)
+            meta_cache[name] = m
+        return m[1], m[2], m[3]
+
+    def _record(name: str, val: Any, shape: Tuple[int, ...]) -> dict:
+        """The one canonical per-tensor record (shared by locals + the return value)."""
+        dtype, device, es = _meta(name, val)
+        numel = 1
+        for d in shape:
+            numel *= d
+        changed = last_shape.get(name) != shape
+        last_shape[name] = shape
+        return {"shape": list(shape), "dtype": dtype, "device": device, "bytes": int(numel * es), "changed": changed}
+
+    def _sentinel(name: str, val: Any, shape: Tuple[int, ...], lineno: int) -> None:
         if diag is None or "nonfinite" in diag:
             return
+        key = (id(val), getattr(val, "_version", 0))  # _version re-checks an in-place-mutated tensor
+        if nan_clean.get(name) == key:
+            return  # this exact object (unmutated) already checked finite for this name
         kind = _nan_kind(val, shape)
         if kind:
             diag["nonfinite"] = {"line": lineno, "var": name, "kind": kind}
+        else:
+            nan_clean[name] = key
 
     def snapshot(frame, lineno: int) -> None:
         slot = records.setdefault(lineno, {})
@@ -105,16 +127,8 @@ def trace_callable(fn: Callable[[], Any], target_file: str, diag: Optional[dict]
                 shape = tuple(int(d) for d in val.shape)
             except Exception:
                 continue
-            changed = last_shape.get(name) != shape
-            last_shape[name] = shape
-            slot[name] = {
-                "shape": list(shape),
-                "dtype": str(getattr(val, "dtype", "")).replace("torch.", ""),
-                "device": _device_str(val),
-                "bytes": _nbytes(val, shape),
-                "changed": changed,
-            }
-            _sentinel(val, shape, lineno, name)
+            slot[name] = _record(name, val, shape)
+            _sentinel(name, val, shape, lineno)
 
     def tracer(frame, event, arg):
         if frame.f_code.co_filename != target_file:
@@ -136,16 +150,8 @@ def trace_callable(fn: Callable[[], Any], target_file: str, diag: Optional[dict]
                 # so attach its shape to the return line under a synthetic "return".
                 try:
                     shape = tuple(int(d) for d in arg.shape)
-                    changed = last_shape.get("return") != shape
-                    last_shape["return"] = shape
-                    records.setdefault(frame.f_lineno, {})["return"] = {
-                        "shape": list(shape),
-                        "dtype": str(getattr(arg, "dtype", "")).replace("torch.", ""),
-                        "device": _device_str(arg),
-                        "bytes": _nbytes(arg, shape),
-                        "changed": changed,
-                    }
-                    _sentinel(arg, shape, frame.f_lineno, "return")
+                    records.setdefault(frame.f_lineno, {})["return"] = _record("return", arg, shape)
+                    _sentinel("return", arg, shape, frame.f_lineno)
                 except Exception:
                     pass
         return tracer
