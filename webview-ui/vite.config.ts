@@ -16,6 +16,9 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     target: 'es2020',
+    // The Monaco editor-core chunk is ~2.2 MB (code-split + lazy on desktop). Quiet the warning
+    // at that expected size while still flagging any future regression that re-bloats it.
+    chunkSizeWarningLimit: 2400,
     rollupOptions: {
       output: {
         entryFileNames: 'assets/main.js',

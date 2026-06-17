@@ -4,7 +4,12 @@
   // so Monaco is code-split into its own chunk and never enters the VS Code bundle.
   import { onDestroy, onMount } from 'svelte';
   import { get } from 'svelte/store';
-  import * as monaco from 'monaco-editor';
+  // Slim Monaco: the editor API only, plus the Python language contribution (the one language we
+  // use). This drops ~80 unused basic-language chunks + the json/css/html/ts language modes from
+  // the bundle (3.3 MB → ~1 MB). The Python Monarch tokenizer is synchronous, so the single
+  // editor.worker below still covers every editor service we touch.
+  import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
+  import 'monaco-editor/esm/vs/basic-languages/python/python.contribution';
   import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
   import { abstract, caretLine, density, doc, fmtMeta, fmtOp, fmtShape, revealTarget, showMeta, structure } from '../store';
   import { monacoTheme, theme } from '../theme';
