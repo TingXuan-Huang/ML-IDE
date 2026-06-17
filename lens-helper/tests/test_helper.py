@@ -4,7 +4,7 @@ import os
 import torch
 import torch.nn as nn
 
-from lens_helper import callgraph, loaders, project, structure, tracer
+from lens_helper import callgraph, loaders, project, rpc, structure, tracer
 
 DATA = os.path.join(os.path.dirname(__file__), "..", "..", "spike", "sampledata")
 
@@ -1319,3 +1319,43 @@ def test_nan_cache_catches_in_place_mutation(tmp_path):
     nf = tracer.trace_module(f)["nonFinite"]
     assert nf is not None, "in-place NaN must still be caught (cache keys on _version, not just id)"
     assert nf["kind"] == "nan"
+
+
+# --- rpc dispatch (the cross-language contract both hosts depend on) -------------
+def test_rpc_ping_and_version():
+    assert rpc.handle("ping", {}) == {"pong": True}
+    v = rpc.handle("version", {})
+    assert v["protocol"] == rpc.PROTOCOL and v["name"] == "lens-helper"
+
+
+def test_rpc_unknown_method_raises():
+    import pytest
+    with pytest.raises(ValueError, match="unknown method"):
+        rpc.handle("bogus", {})
+
+
+def test_rpc_main_envelopes_result_and_error(monkeypatch, capsys):
+    import io as _io
+    import json as _json
+    # one good request (ping) + one malformed line (+ a blank line, skipped) -> two responses.
+    monkeypatch.setattr(rpc.sys, "stdin", _io.StringIO('{"id": 7, "method": "ping"}\nnot json\n\n'))
+    rpc.main()
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+    assert len(lines) == 2, lines
+    ok, bad = _json.loads(lines[0]), _json.loads(lines[1])
+    assert ok == {"id": 7, "result": {"pong": True}}
+    assert bad["id"] is None and "error" in bad  # malformed JSON -> error envelope, no id
+
+
+def test_trace_module_load_failure_is_a_problem(tmp_path):
+    # A broken module surfaces as a problem (not a crash) through the shared _exec_module path.
+    f = _write(tmp_path, "brokenmod.py", "import torch\nthis is not valid python(\n")
+    res = tracer.trace_module(f)
+    assert res["records"] == {} and res["problems"], res
+    assert "module load failed" in res["problems"][0]["message"]
+
+
+def test_trace_function_load_failure_is_an_error(tmp_path):
+    f = _write(tmp_path, "brokenfn.py", "import torch\ndef forward(x): return x(\n")
+    res = tracer.trace_function(f, "forward", 0)
+    assert res["records"] == {} and res["error"] and "module load failed" in res["error"]
