@@ -16,6 +16,7 @@ import type {
   TraceState,
   Zone,
 } from '@fusion/shared';
+import { PROTOCOL_VERSION } from '@fusion/shared';
 import { post } from './vscode';
 
 export const structure = writable<FileStructure | null>(null);
@@ -396,5 +397,19 @@ export function applyHostMessage(m: HostMessage): void {
       // Remember the reference only on a real (non-error, non-pending) result.
       if (m.result.pathB && !m.result.error && !m.result.pending) lastReference.set(m.result.pathB);
       break;
+    case 'init':
+      // Protocol-version handshake: warn loudly if the host and webview were built against
+      // different protocol versions (the only thing this message carries).
+      if (m.version !== PROTOCOL_VERSION)
+        console.warn(`Fusion protocol mismatch: host=${m.version} webview=${PROTOCOL_VERSION}`);
+      break;
+    case 'hintDensity':
+      break; // legacy; density is now driven by tracingConfig
+    default: {
+      // Exhaustiveness guard: an unhandled HostMessage variant is a COMPILE error here.
+      const _exhaustive: never = m;
+      void _exhaustive;
+      break;
+    }
   }
 }

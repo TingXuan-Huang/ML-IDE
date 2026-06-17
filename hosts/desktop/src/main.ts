@@ -847,6 +847,18 @@ async function onMessage(m: WebviewMessage): Promise<void> {
       break;
     case 'revealSymbol':
       break; // desktop scrolls Monaco in-renderer (revealInEditor); nothing to do host-side
+    // These are client-side UI state in the webview; the desktop host intentionally ignores them.
+    case 'setPrimaryZone':
+    case 'toggleHintDensity':
+    case 'cancelTrace':
+      break;
+    default: {
+      // Exhaustiveness guard: a new WebviewMessage variant that isn't handled above is now a
+      // COMPILE error here, instead of being silently dropped at runtime.
+      const _exhaustive: never = m;
+      void _exhaustive;
+      break;
+    }
   }
 }
 
