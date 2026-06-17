@@ -17,7 +17,12 @@ export interface RawStructure {
 }
 
 export interface RawTrace {
-  records: Record<string, Record<string, { shape: number[]; dtype: string; changed: boolean }>>;
+  records: Record<
+    string,
+    Record<string, { shape: number[]; dtype: string; changed: boolean; device?: string; bytes?: number }>
+  >;
+  // First non-finite (NaN/Inf) tensor seen during the trace, if any.
+  nonFinite?: { line: number; var: string; kind: 'nan' | 'inf' } | null;
   // Single crash (trace_file / trace_function): one crashing line + its message.
   error?: string | null;
   crashLine?: number | null;
@@ -62,6 +67,8 @@ export function toFileStructure(
             shape: v.shape,
             dtype: v.dtype,
             changed: v.changed,
+            device: v.device,
+            bytes: v.bytes,
           }))
         : [];
       const problem = problemAt.has(ln)
@@ -81,7 +88,14 @@ export function toFileStructure(
       traceInput: noteAt.get(fn.startLine),
     };
   });
-  return { path: raw.path, language: 'python', functions, hasShapes, dimNames: trace?.dims };
+  return {
+    path: raw.path,
+    language: 'python',
+    functions,
+    hasShapes,
+    dimNames: trace?.dims,
+    nonFinite: trace?.nonFinite ?? undefined,
+  };
 }
 
 /** Shape of the helper's `trace_module` result (whole-file: build-check + synth forward). */
@@ -91,6 +105,7 @@ export interface TraceModuleResult {
   notes: Array<{ label: string; line: number; note: string }>; // call used per target (provenance)
   ops?: Record<string, string>; // matmul/broadcast notes by line
   dims?: Record<string, string>; // concrete dim value -> symbol (B/L/D…) for the abstract view
+  nonFinite?: { line: number; var: string; kind: 'nan' | 'inf' } | null; // first NaN/Inf tensor
 }
 
 /** Fold a trace_module result into a RawTrace so toFileStructure can render it. */
@@ -101,5 +116,6 @@ export function moduleTraceToRaw(m: TraceModuleResult): RawTrace {
     notes: m.notes.map((n) => ({ line: n.line, note: n.note })),
     ops: m.ops,
     dims: m.dims,
+    nonFinite: m.nonFinite ?? undefined,
   };
 }

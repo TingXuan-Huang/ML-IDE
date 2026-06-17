@@ -7,10 +7,12 @@
   import ProjectGraph from './ProjectGraph.svelte';
   import ModelSummary from './ModelSummary.svelte';
   import PaperView from './PaperView.svelte';
+  import Compare from './Compare.svelte';
   import type { Zone } from '@fusion/shared';
 
-  // Summary (#2) + Paper (#8) are per-file; Project (#3) needs an opened folder.
-  $: tabs = ['blocks', 'graph', 'summary', 'paper', 'data', ...($folder ? ['project'] : [])] as Zone[];
+  // Summary (#2) + Paper (#8) are per-file; Project (#3) needs an opened folder; Compare (B)
+  // needs the Electron file dialog, so it's desktop-only.
+  $: tabs = ['blocks', 'graph', 'summary', 'paper', 'data', ...($folder ? ['project'] : []), ...(isDesktop ? ['compare'] : [])] as Zone[];
   const label = (z: Zone) => z[0].toUpperCase() + z.slice(1);
 
   function setZone(z: Zone): void {
@@ -74,6 +76,8 @@
     <PaperView />
   {:else if $zone === 'project'}
     <ProjectGraph />
+  {:else if $zone === 'compare'}
+    <Compare />
   {:else}
     <Data />
   {/if}

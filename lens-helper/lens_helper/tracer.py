@@ -20,15 +20,81 @@ def _is_tensor(v: Any) -> bool:
     return root in ("torch", "numpy") and hasattr(v, "shape") and hasattr(v, "dtype")
 
 
-def trace_callable(fn: Callable[[], Any], target_file: str):
-    """Return (records, error).
-    records: { lineno: { varname: {"shape":[...], "dtype":str, "changed":bool} } }
+# --- per-tensor metadata (the rest of what `print(x.shape, x.dtype, x.device)` carries) ---
+
+def _device_str(val: Any) -> str:
+    """Tensor device as a short string ("cpu", "cuda:0"). numpy<2 arrays have no device -> "";
+    numpy>=2 exposes an Array-API .device of "cpu", which fmtMeta hides anyway."""
+    d = getattr(val, "device", None)
+    return "" if d is None else str(d).replace("torch.", "")
+
+
+def _nbytes(val: Any, shape: Tuple[int, ...]) -> int:
+    """Memory footprint = numel × element_size. Works for torch (.element_size) and numpy
+    (.itemsize); 0 if it can't be determined."""
+    try:
+        n = 1
+        for d in shape:
+            n *= int(d)
+        es = val.element_size() if hasattr(val, "element_size") else int(getattr(val, "itemsize", 0))
+        return int(n * es)
+    except Exception:
+        return 0
+
+
+# Cap the NaN reduction so a single huge activation can't dominate a line's trace cost.
+_FINITE_CAP = 8_000_000
+
+
+def _nan_kind(val: Any, shape: Tuple[int, ...]) -> Optional[str]:
+    """'nan' if any element of a float/complex tensor is NaN, else None. We flag NaN ONLY —
+    not Inf — because -inf is routinely intentional (attention masks, masked_fill before a
+    softmax), so flagging Inf would false-alarm on most transformers. NaN is almost always a
+    real bug (0/0, inf-inf, log(neg)). Capped by numel and wrapped; only runs when a caller
+    opts in (diag is not None)."""
+    try:
+        n = 1
+        for d in shape:
+            n *= int(d)
+        if n == 0 or n > _FINITE_CAP:
+            return None
+        mod = type(val).__module__.split(".")[0]
+        if mod == "torch":
+            import torch
+            if not torch.is_floating_point(val) and not torch.is_complex(val):
+                return None  # int/bool tensors can't be NaN
+            if bool(torch.isnan(val).any()):
+                return "nan"
+        elif mod == "numpy":
+            import numpy as np
+            if val.dtype.kind not in ("f", "c"):
+                return None
+            if bool(np.isnan(val).any()):
+                return "nan"
+    except Exception:
+        return None
+    return None
+
+
+def trace_callable(fn: Callable[[], Any], target_file: str, diag: Optional[dict] = None):
+    """Return (records, error, crash_line).
+    records: { lineno: { varname: {"shape":[...], "dtype", "device", "bytes", "changed"} } }
     error:   the Exception if fn() raised (e.g. a shape-mismatch RuntimeError), else None.
-    """
+    diag:    optional out-dict. When provided, the FIRST tensor seen to contain NaN is
+             recorded as diag["nonfinite"] = {"line", "var", "kind"} (the print(x.isnan())
+             killer). Omitted by default so the NaN-check costs nothing for callers that
+             don't want it (and the (records, err, crash) return arity is unchanged)."""
     records: Dict[int, Dict[str, Any]] = {}
     prev_line: Dict[int, Optional[int]] = {}
     last_shape: Dict[str, Tuple[int, ...]] = {}
     crash_line: list = [None]  # first (deepest) exception line == the real crash site
+
+    def _sentinel(val: Any, shape: Tuple[int, ...], lineno: int, name: str) -> None:
+        if diag is None or "nonfinite" in diag:
+            return
+        kind = _nan_kind(val, shape)
+        if kind:
+            diag["nonfinite"] = {"line": lineno, "var": name, "kind": kind}
 
     def snapshot(frame, lineno: int) -> None:
         slot = records.setdefault(lineno, {})
@@ -44,8 +110,11 @@ def trace_callable(fn: Callable[[], Any], target_file: str):
             slot[name] = {
                 "shape": list(shape),
                 "dtype": str(getattr(val, "dtype", "")).replace("torch.", ""),
+                "device": _device_str(val),
+                "bytes": _nbytes(val, shape),
                 "changed": changed,
             }
+            _sentinel(val, shape, lineno, name)
 
     def tracer(frame, event, arg):
         if frame.f_code.co_filename != target_file:
@@ -72,8 +141,11 @@ def trace_callable(fn: Callable[[], Any], target_file: str):
                     records.setdefault(frame.f_lineno, {})["return"] = {
                         "shape": list(shape),
                         "dtype": str(getattr(arg, "dtype", "")).replace("torch.", ""),
+                        "device": _device_str(arg),
+                        "bytes": _nbytes(arg, shape),
                         "changed": changed,
                     }
+                    _sentinel(arg, shape, frame.f_lineno, "return")
                 except Exception:
                     pass
         return tracer
@@ -596,7 +668,8 @@ def trace_function(path: str, name: str, line: int, batch: int = 2, seq: int = 1
             # not a crash — we just couldn't auto-call it; the note explains why
             return {"records": {}, "error": None, "crashLine": None, "note": note, "ops": {}, "dims": {}}
 
-        records, err, crash = trace_callable(invoke, path)
+        diag: dict = {}
+        records, err, crash = trace_callable(invoke, path, diag)
         dim_syms: Dict[str, str] = {}
         attr_syms: Dict[str, str] = {}
         _merge_dim_symbols(dim_syms, args or ())
@@ -604,7 +677,7 @@ def trace_function(path: str, name: str, line: int, batch: int = 2, seq: int = 1
             _merge_attr_symbols(attr_syms, inst)
         return {"records": records, "error": (f"{type(err).__name__}: {err}" if err else None),
                 "crashLine": crash, "note": note, "ops": _op_notes(tree, records),
-                "dims": {**attr_syms, **dim_syms}}
+                "dims": {**attr_syms, **dim_syms}, "nonFinite": diag.get("nonfinite")}
     finally:
         # keep the module registered through construction + the traced call (registry
         # decorators / get_type_hints look up sys.modules[__module__]), then clean up.
@@ -656,6 +729,7 @@ def trace_module(path: str, batch: int = 2, seq: int = 16, project_root: str = "
         notes: list = []
         dim_syms: Dict[str, str] = {}  # input-derived: concrete dim value -> B/L/D… (wins)
         attr_syms: Dict[str, str] = {}  # model-derived: n_heads -> H, head_dim -> dh, …
+        diag: dict = {}  # first non-finite tensor across every build + forward in this file
 
         def merge(srcrec) -> None:
             for ln, vars_ in srcrec.items():
@@ -678,6 +752,9 @@ def trace_module(path: str, batch: int = 2, seq: int = 16, project_root: str = "
                 # BUILD CHECK: construct under the tracer (catches shape errors in __init__).
                 holder: list = []
                 build = (lambda e=expr, h=holder: h.append(_eval_expr(e, g))) if expr else (lambda c=cls, h=holder: h.append(c()))
+                # No `diag` on the BUILD check: a transient NaN among __init__ locals (e.g.
+                # uninitialized torch.empty() garbage) would nondeterministically pre-empt the
+                # real forward-pass NaN. The sentinel only watches forward/function calls.
                 recs, err, crash = trace_callable(_seeded_call(build), path)
                 merge(recs)
                 cnote = expr if expr else f"{node.name}()"
@@ -697,7 +774,7 @@ def trace_module(path: str, batch: int = 2, seq: int = 16, project_root: str = "
                 except _CannotInvoke as e:
                     notes.append({"label": f"{node.name}.forward", "line": fwd_line, "note": str(e)})
                     continue
-                recs2, err2, crash2 = trace_callable(_seeded_call(lambda m=method, a=args: m(*a), model=inst), path)
+                recs2, err2, crash2 = trace_callable(_seeded_call(lambda m=method, a=args: m(*a), model=inst), path, diag)
                 merge(recs2)
                 if err2 is not None:
                     # A failure that's just us guessing the input's DIMENSIONALITY wrong (e.g.
@@ -721,7 +798,7 @@ def trace_module(path: str, batch: int = 2, seq: int = 16, project_root: str = "
                     args, ishape = _resolve_args(None, fn, node.lineno, directives, g)
                 except _CannotInvoke:
                     continue  # needs args & no directive -> skip silently at file level
-                recs, err, crash = trace_callable(_seeded_call(lambda f=fn, a=args: f(*a)), path)
+                recs, err, crash = trace_callable(_seeded_call(lambda f=fn, a=args: f(*a)), path, diag)
                 merge(recs)
                 if err is not None:
                     problems.append({"line": crash or node.lineno, "message": f"{node.name}(): {type(err).__name__}: {err}"})
@@ -731,7 +808,8 @@ def trace_module(path: str, batch: int = 2, seq: int = 16, project_root: str = "
 
         # Input-derived symbols (B/L/D anchors) win over model-attribute ones on collision.
         return {"records": records, "problems": problems, "notes": notes,
-                "ops": _op_notes(tree, records), "dims": {**attr_syms, **dim_syms}}
+                "ops": _op_notes(tree, records), "dims": {**attr_syms, **dim_syms},
+                "nonFinite": diag.get("nonfinite")}
     finally:
         # keep the module registered through construction + every traced forward
         # (registry decorators look up sys.modules[__module__]), then clean up.
@@ -1014,21 +1092,27 @@ def paper_module(path: str, batch: int = 2, seq: int = 16, project_root: str = "
         tree = ast.parse(src, path)
         hints = _rank_hints(tree)
         sections, problems, attr_syms, dim_syms = [], [], {}, {}
+        skipped = []  # classes whose forward couldn't be auto-invoked (compare_traces folds these)
         for node in tree.body:
             if not isinstance(node, ast.ClassDef):
                 continue
             try:
                 inst, method, args, ishape, cnote, fwd_node, fwd_line = _build_class(node, g, directives, hints)
-            except _CannotInvoke:
+            except _CannotInvoke as e:
+                skipped.append({"module": f"{node.name}.forward", "line": node.lineno, "message": str(e)})
                 continue
             except Exception as e:
-                problems.append({"line": node.lineno, "message": f"build {node.name}(): {type(e).__name__}: {e}"})
+                # `module` is the structural module name (so compare_traces can fold a crashed
+                # forward into matched without regexing the message). Harmless to the Paper tab.
+                problems.append({"line": node.lineno, "module": f"{node.name}.forward",
+                                 "message": f"build {node.name}(): {type(e).__name__}: {e}"})
                 continue
             if fwd_node is None:
                 continue
             recs, err, crash = trace_callable(_seeded_call(lambda m=method, a=args: m(*a), model=inst), path)
             if err is not None:
-                problems.append({"line": crash or fwd_line, "message": f"{node.name}.forward: {type(err).__name__}: {err}"})
+                problems.append({"line": crash or fwd_line, "module": f"{node.name}.forward",
+                                 "message": f"{node.name}.forward: {type(err).__name__}: {err}"})
                 continue
             _merge_attr_symbols(attr_syms, inst)
             _merge_dim_symbols(dim_syms, args)
@@ -1038,9 +1122,184 @@ def paper_module(path: str, batch: int = 2, seq: int = 16, project_root: str = "
             sections.append({"module": f"{node.name}.forward", "forwardNote": f"{cnote}.forward({ishape})",
                              "params": [a.arg for a in fwd_node.args.args if a.arg not in ("self", "cls")],
                              "startLine": fwd_line, "steps": steps})
-        return {"path": os.path.abspath(path), "sections": sections, "dims": {**attr_syms, **dim_syms}, "problems": problems}
+        return {"path": os.path.abspath(path), "sections": sections, "dims": {**attr_syms, **dim_syms},
+                "problems": problems, "skipped": skipped}
     finally:
         sys.modules.pop("fusion_traced", None)
+
+
+def _op_kind(op) -> tuple:
+    """The op-kind SEQUENCE on a tracer op note — EVERY recognized op on the line, in order, not
+    just the leader (a single source line can chain ops, rendered 'permute(...) ∘ softmax(...)' or
+    'a; b'). Used to ALIGN two forwards: () for a plain assignment / module call (a Linear, relu, a
+    residual add) — those align by shape. A chained op that differs only PAST the leader (e.g.
+    softmax vs log_softmax after the same permute) still flags, because the whole sequence is the
+    key. Shape groups like '[2,4]' contribute no token (they don't start with a letter)."""
+    if not op:
+        return ()
+    kinds = []
+    for seg in re.split(r"[∘;→]|->", op):
+        m = re.match(r"\s*([A-Za-z_]\w*)", seg)
+        if m:
+            kinds.append(m.group(1))
+    return tuple(kinds)
+
+
+def _shape_sig(step) -> list:
+    """Per-LHS shapes with dim 0 wildcarded, so a different batch size between two runs isn't a
+    divergence (batch is never a port bug) while a wrong d_model / seq / head_dim still is. Caveat:
+    this assumes dim 0 IS the batch axis — a permuted/transposed tensor whose leading dim is real
+    (e.g. [D, L]) would have a genuine dim-0 difference hidden. A crashed step gets a sentinel that
+    never matches a real step."""
+    if step.get("crashed"):
+        return [["<crashed>"]]
+    out = []
+    for sh in step.get("shapes", []):
+        s = list(sh.get("shape", []))
+        if s:
+            s[0] = "*"  # batch wildcard
+        out.append(s)
+    return out
+
+
+def _align_key(step):
+    """Hashable alignment fingerprint: (op-kind, batch-normalized shapes). Two steps are 'the same
+    op' iff these match — so LCS pairs corresponding steps even across renamed locals, an inserted
+    no-op becomes ONE gap (not a cascade), and a real shape/op difference becomes a gap = a
+    divergence. Activation/arg swaps that change neither shape nor op-kind are not auto-flagged
+    (read the source columns); everything that changes shape or op IS."""
+    return (_op_kind(step.get("op")), tuple(tuple(s) for s in _shape_sig(step)))
+
+
+def _lcs_align(keys_a, keys_b):
+    """Longest-common-subsequence backtrace over two step-key sequences -> aligned rows
+    [(i|None, j|None)]: a common key pairs (i, j); an insertion/deletion is one-sided. Aligning on
+    a discriminating key (op + shape) means a single inserted op is one gap, not a cascade."""
+    na, nb = len(keys_a), len(keys_b)
+    dp = [[0] * (nb + 1) for _ in range(na + 1)]
+    for i in range(na - 1, -1, -1):
+        for j in range(nb - 1, -1, -1):
+            dp[i][j] = dp[i + 1][j + 1] + 1 if keys_a[i] == keys_b[j] else max(dp[i + 1][j], dp[i][j + 1])
+    rows, i, j = [], 0, 0
+    while i < na and j < nb:
+        if keys_a[i] == keys_b[j]:
+            rows.append((i, j)); i += 1; j += 1
+        elif dp[i + 1][j] >= dp[i][j + 1]:
+            rows.append((i, None)); i += 1
+        else:
+            rows.append((None, j)); j += 1
+    while i < na:
+        rows.append((i, None)); i += 1
+    while j < nb:
+        rows.append((None, j)); j += 1
+    return rows
+
+
+def _unavailable_modules(problems, skipped) -> dict:
+    """{ClassName.forward: {message, line}} for forwards that couldn't be traced — they RAISED
+    (problems, tagged with a structural `module`) or couldn't be auto-invoked (skipped, e.g. a
+    multi-arg forward with no `# fusion: input`). Folded into matched as a divergence so a
+    present-but-untraceable module never masquerades as 'missing from the other file'."""
+    out: Dict[str, dict] = {}
+    for p in (problems or []):
+        mod = p.get("module")
+        if mod and mod not in out:
+            out[mod] = {"message": p.get("message", "crashed"), "line": p.get("line", 0)}
+    for s in (skipped or []):
+        mod = s.get("module")
+        if mod and mod not in out:
+            out[mod] = {"message": s.get("message", "not traceable"), "line": s.get("line", 0)}
+    return out
+
+
+def _crashed_step(info) -> dict:
+    """A single synthetic step standing in for a forward that couldn't be traced (crash / skip)."""
+    return {"line": info.get("line", 0), "lhs": "", "op": None, "shapes": [], "text": "",
+            "crashed": True, "message": info.get("message", "not traceable")}
+
+
+def _compare_module(name, sec_a, sec_b, bad_a, bad_b):
+    """Align two forwards by op+shape (LCS) and find the first diverging row. An untraceable side
+    (crash/skip) folds to a single crashed row -> a divergence. Returns pre-aligned `rows` so the
+    UI renders the side-by-side diff directly. A matched (LCS) row shares an identical key, so it
+    never diverges; a one-sided row (an op present on only one side, incl. a wrong shape) does."""
+    if bad_a or bad_b:
+        rows = [{"a": _crashed_step(bad_a) if bad_a else None,
+                 "b": _crashed_step(bad_b) if bad_b else None, "diverge": True}]
+        note = ("not traceable in both" if bad_a and bad_b
+                else "not traceable in A (this file)" if bad_a
+                else "not traceable in B (reference)")
+        return {"module": name, "diverges": True, "divergeStep": 0, "rows": rows, "matchNote": note}
+
+    steps_a = sec_a.get("steps", []) if sec_a else []
+    steps_b = sec_b.get("steps", []) if sec_b else []
+    pairs = _lcs_align([_align_key(s) for s in steps_a], [_align_key(s) for s in steps_b])
+    rows, diverge = [], None
+    for idx, (i, j) in enumerate(pairs):
+        a = steps_a[i] if i is not None else None
+        b = steps_b[j] if j is not None else None
+        d = a is None or b is None  # LCS pairs share an identical key -> match; a gap -> divergence
+        if d and diverge is None:
+            diverge = idx
+        rows.append({"a": a, "b": b, "diverge": d})
+    return {"module": name, "diverges": diverge is not None, "divergeStep": diverge,
+            "rows": rows, "matchNote": None}
+
+
+def _attach_source(sections, src_lines):
+    """Annotate each step with its stripped source line, so the Compare UI shows the actual code —
+    the only way to see arg/activation differences that change neither shape nor op-kind."""
+    for sec in sections or []:
+        for st in sec.get("steps", []):
+            ln = st.get("line", 0)
+            st["text"] = src_lines[ln - 1].strip() if 1 <= ln <= len(src_lines) else ""
+
+
+def compare_traces(path_a: str, path_b: str, project_root: str = ""):
+    """Faithful-port compare. A = this file, B = the picked reference. Trace both as paper
+    sections, match each `ClassName.forward` by name, and align the two forwards by their (op-kind,
+    batch-normalized shape) sequence via LCS — so one inserted/removed op is a single gap, not a
+    cascade, and a wrong shape or op surfaces as a divergence. A side that couldn't be traced
+    (crash/skip) folds in as a divergence, never a phantom onlyA/onlyB. Each step carries its
+    source line so activation/arg differences (which don't change shape or op-kind, so aren't
+    auto-flagged) are still visible. Renamed-class matching (agent-driven) is the next step."""
+    import os
+
+    a = paper_module(path_a, project_root=project_root)
+    b = paper_module(path_b, project_root=project_root)
+    try:
+        src_a = open(os.path.abspath(path_a)).read().splitlines()
+        src_b = open(os.path.abspath(path_b)).read().splitlines()
+    except OSError:
+        src_a, src_b = [], []
+    _attach_source(a.get("sections", []), src_a)
+    _attach_source(b.get("sections", []), src_b)
+
+    secs_a = {s["module"]: s for s in a.get("sections", [])}
+    secs_b = {s["module"]: s for s in b.get("sections", [])}
+    bad_a = _unavailable_modules(a.get("problems", []), a.get("skipped", []))
+    bad_b = _unavailable_modules(b.get("problems", []), b.get("skipped", []))
+    names_a = set(secs_a) | set(bad_a)
+    names_b = set(secs_b) | set(bad_b)
+
+    matched = []
+    for name in sorted(names_a & names_b):
+        matched.append(_compare_module(name, secs_a.get(name), secs_b.get(name),
+                                       bad_a.get(name), bad_b.get(name)))
+    return {
+        "pathA": os.path.abspath(path_a),
+        "pathB": os.path.abspath(path_b),
+        "matched": matched,
+        "onlyA": sorted(names_a - names_b),
+        "onlyB": sorted(names_b - names_a),
+        "dimsA": a.get("dims", {}),
+        "dimsB": b.get("dims", {}),
+        "problems": a.get("problems", []) + b.get("problems", []),
+        "note": "A = this file · B = reference. Aligned by op-kind + shape (batch ignored); a row "
+                "flags when a shape/op differs or an op is missing on one side. Lines that match in "
+                "shape AND op aren't auto-flagged — read the source columns for arg/activation "
+                "differences. Renamed-class matching is the next step.",
+    }
 
 
 def _is_model(cls) -> bool:

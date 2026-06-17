@@ -3,7 +3,7 @@
 // cannot drift (compiler-enforced). Bump PROTOCOL_VERSION on any breaking change.
 export const PROTOCOL_VERSION = 1;
 
-export type Zone = 'blocks' | 'graph' | 'summary' | 'data' | 'project' | 'paper';
+export type Zone = 'blocks' | 'graph' | 'summary' | 'data' | 'project' | 'paper' | 'compare';
 export type HintDensity = 'smart' | 'all';
 
 // ---- data models --------------------------------------------------------------
@@ -12,6 +12,12 @@ export interface ShapeRecord {
   shape: number[]; // e.g. [32, 768]
   dtype: string; // e.g. "float32"
   changed: boolean; // shape differs from this var's value on the previous line (smart density)
+  // The rest of what `print(x.shape, x.dtype, x.device)` carries — optional for
+  // backward-compat with traces produced before the Tensor Inspector add-on.
+  // (requires_grad is intentionally omitted: the trace runs under torch.no_grad(), so every
+  // captured activation reads False — the Summary tab's trainable-param count covers grad.)
+  device?: string; // e.g. "cpu", "cuda:0" (numpy arrays have no device -> "")
+  bytes?: number; // memory footprint = numel × element_size
 }
 
 export interface BlockLine {
@@ -47,6 +53,10 @@ export interface FileStructure {
   // Abstract view: concrete dim VALUE (as string) -> symbol (B/L/D/C/H/W), from the
   // last trace's input dims. The cockpit relabels shapes with these when abstract mode is on.
   dimNames?: Record<string, string>;
+  // The first tensor this trace saw contain NaN — the print(x.isnan()) killer. Surfaced as an
+  // inline banner + editor marker on that line. NaN only (Inf is often an intentional mask);
+  // absent = clean. The `kind` union leaves room for a future opt-in Inf mode.
+  nonFinite?: { line: number; var: string; kind: 'nan' | 'inf' };
 }
 
 export interface CallGraphNode {
@@ -179,7 +189,8 @@ export interface PaperView {
   path: string;
   sections: PaperSection[];
   dims?: Record<string, string>; // dim-symbol map (key matches the Python paper_module() result) — drives the abstract toggle
-  problems: Array<{ line: number; message: string }>;
+  problems: Array<{ line: number; module?: string; message: string }>; // module: structural name (compare_traces folds crashes by it)
+  skipped?: Array<{ line: number; module: string; message: string }>; // forwards that couldn't be auto-invoked (compare_traces folds these)
 }
 
 // ---- tracing config (Tracing settings tab) ----
@@ -188,6 +199,49 @@ export interface TracingConfigWire {
   abstract: boolean; // relabel concrete dims with symbols (B/L/D) — the "abstract" view
   autoTrace: boolean; // trace a file as soon as it's opened
   retries: number; // ✦ ask agent<->tracer rounds
+  meta?: boolean; // show per-tensor dtype · device · grad · memory inline (Tensor Inspector)
+}
+
+// ---- design B: faithful-port compare ----
+// Two implementations of the same architecture, matched by `ClassName.forward` (then a
+// conservative structural rename-pair) and aligned step-by-step. A CompareStep is a PaperStep
+// plus a crashed/message pair (so the Python side reuses _paper_step verbatim and the webview
+// reuses PaperView's renderer).
+export interface CompareStep {
+  line: number;
+  lhs: string;
+  op?: string | null;
+  shapes: ShapeRecord[];
+  text?: string; // the stripped source line (so arg/activation differences are visible)
+  changed?: boolean; // present on real (paper) steps
+  crashed?: boolean; // a synthetic step standing in for a forward that couldn't be traced
+  message?: string; // crash/skip message when crashed
+}
+// A pre-aligned diff row: the A step beside the B step (one side absent = an inserted/removed op).
+export interface CompareRow {
+  a?: CompareStep | null;
+  b?: CompareStep | null;
+  diverge: boolean; // a one-sided row, or a side that couldn't be traced
+}
+export interface CompareModule {
+  module: string; // matched name
+  diverges: boolean; // any diverging row (incl. a side that couldn't be traced)
+  divergeStep: number | null; // index of the first diverging row in `rows`; null = matches
+  rows: CompareRow[]; // the aligned A-vs-B step diff (LCS by op-kind + batch-normalized shape)
+  matchNote?: string | null; // "not traceable in B (reference)", etc.
+}
+export interface CompareResult {
+  pathA: string; // A = this file (the open editor file)
+  pathB: string; // B = the reference you picked
+  matched: CompareModule[]; // forwards present in BOTH files (incl. crash/skip folds)
+  onlyA: string[]; // module names genuinely only in this file
+  onlyB: string[]; // module names genuinely only in the reference
+  dimsA?: Record<string, string>; // A's dim-symbol map (relabel A's column when abstract is on)
+  dimsB?: Record<string, string>; // B's dim-symbol map (relabel B's column)
+  problems?: Array<{ line: number; module?: string; message: string }>;
+  note?: string; // diff-method disclaimer (rendered)
+  error?: string; // a transport/trace failure — renders in-zone instead of hanging the spinner
+  pending?: boolean; // set while a compare is in flight, so the zone shows "comparing…"
 }
 
 // ---- host -> webview -----------------------------------------------------------
@@ -221,6 +275,7 @@ export type HostMessage =
   | { type: 'paperExplainChunk'; delta: string } // #8 streamed "explain like a paper" prose
   | { type: 'paperExplainDone'; text: string }
   | { type: 'paperExplainError'; message: string }
+  | { type: 'compareResult'; result: CompareResult } // design B scaffold — faithful-port compare
   // trace-assist: the agent proposed a `# fusion:` directive for a function (review mode)
   | { type: 'directiveProposed'; forFunction: string; path: string; line: number; directive: string; explanation: string };
 
@@ -264,6 +319,8 @@ export type WebviewMessage =
   | { type: 'requestPaper' } // lazy build of the Paper tab
   | { type: 'explainPaper'; id: string } // run the agent "explain like a paper"
   | { type: 'cancelPaperExplain' }
+  | { type: 'compareFiles'; pathA: string; pathB: string } // design B — request a faithful-port compare
+  | { type: 'pickCompareFile' } // design B — open a file dialog for the reference, compare against the open file
   // trace-assist: ask the agent to author a `# fusion:` directive for a function
   | { type: 'traceAssist'; id: string; path: string; name: string; line: number }
   // apply an agent-proposed directive (review mode -> user clicked Insert)

@@ -6,7 +6,7 @@
   import { get } from 'svelte/store';
   import * as monaco from 'monaco-editor';
   import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
-  import { abstract, caretLine, density, doc, fmtOp, fmtShape, revealTarget, structure } from '../store';
+  import { abstract, caretLine, density, doc, fmtMeta, fmtOp, fmtShape, revealTarget, showMeta, structure } from '../store';
   import { monacoTheme, theme } from '../theme';
   import { post } from '../vscode';
   import type { FileStructure } from '@fusion/shared';
@@ -26,7 +26,7 @@
   // Render traced shapes INLINE in the editor: gray ghost-text at each line's end
   // (changed shapes only, like the Blocks zone) + red markers on crash lines. This lets
   // big models be read with full code + horizontal scroll, not the narrow Blocks pane.
-  function applyShapes(s: FileStructure, dens: 'changed' | 'all', abst: boolean): void {
+  function applyShapes(s: FileStructure, dens: 'changed' | 'all', abst: boolean, meta: boolean): void {
     if (!editor) return;
     const model = editor.getModel();
     if (!model) return;
@@ -37,7 +37,11 @@
       for (const l of fn.lines) {
         if (l.line < 1 || l.line > lastLine) continue;
         const shown = dens === 'all' ? l.shapes : l.shapes.filter((x) => x.changed);
-        const parts = shown.map((x) => `${x.varName}[${fmtShape(x.shape, s.dimNames, abst)}]`);
+        const parts = shown.map((x) => {
+          const base = `${x.varName}[${fmtShape(x.shape, s.dimNames, abst)}]`;
+          const m = meta ? fmtMeta(x) : '';
+          return m ? `${base} ${m}` : base;
+        });
         if (l.op) parts.push('∗ ' + fmtOp(l.op, s.dimNames, abst));
         if (parts.length) {
           const col = model.getLineMaxColumn(l.line);
@@ -57,6 +61,17 @@
           });
         }
       }
+    }
+    // NaN/Inf sentinel: a warning marker on the first non-finite line (the print(x.isnan()) killer).
+    if (s.nonFinite && s.nonFinite.line >= 1 && s.nonFinite.line <= lastLine) {
+      markers.push({
+        severity: monaco.MarkerSeverity.Warning,
+        message: `Fusion: first NaN here — ${s.nonFinite.var} contains NaN`,
+        startLineNumber: s.nonFinite.line,
+        startColumn: 1,
+        endLineNumber: s.nonFinite.line,
+        endColumn: model.getLineMaxColumn(s.nonFinite.line),
+      });
     }
     if (!shapeDecos) shapeDecos = editor.createDecorationsCollection();
     shapeDecos.set(decos);
@@ -92,7 +107,7 @@
   }
 
   // Re-apply inline shapes whenever the trace (or density / abstract view) updates for the loaded file.
-  $: if (editor && $structure && $doc && $structure.path === $doc.path) applyShapes($structure, $density, $abstract);
+  $: if (editor && $structure && $doc && $structure.path === $doc.path) applyShapes($structure, $density, $abstract, $showMeta);
   // Follow the app's light/dark toggle live.
   $: if (editor) monaco.editor.setTheme(monacoTheme($theme));
 

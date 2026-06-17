@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { abstract, askTrace, caretLine, density, fmtOp, fmtShape, isDesktop, revealInEditor, structure, traceWithRealInput } from '../store';
+  import { abstract, askTrace, caretLine, density, fmtMeta, fmtOp, fmtShape, isDesktop, revealInEditor, showMeta, structure, traceWithRealInput } from '../store';
   import { post } from '../vscode';
   import type { BlockLine, FunctionBlock } from '@fusion/shared';
 
@@ -34,7 +34,11 @@
     l.problem
       ? '✕ shape error'
       : ($density === 'all' ? l.shapes : l.shapes.filter((x) => x.changed))
-          .map((x) => `${x.varName}[${fmtShape(x.shape, s?.dimNames, $abstract)}]`)
+          .map((x) => {
+            const base = `${x.varName}[${fmtShape(x.shape, s?.dimNames, $abstract)}]`;
+            const meta = $showMeta ? fmtMeta(x) : '';
+            return meta ? `${base} ${meta}` : base;
+          })
           .join('  ');
   $: isChanged = (l: BlockLine): boolean =>
     !!l.problem || l.shapes.some((x) => x.changed) || ($density === 'all' && l.shapes.length > 0);
@@ -67,6 +71,11 @@
 {#if !s || !s.functions.length}
   <div class="empty">Open a Python file. Then <b>▶ Trace this file</b> to fill in shapes.</div>
 {:else}
+  {#if s.nonFinite}
+    <div class="nanbar" title="The trace produced a NaN — no print(x.isnan()) needed">
+      ⚠ NaN in <b>{s.nonFinite.var}</b> — first NaN at line {s.nonFinite.line}
+    </div>
+  {/if}
   {#each s.functions as fn}
     <div class="fn" class:active={activeFn === fn.startLine}>
       <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
@@ -105,7 +114,7 @@
         <div class="reqs" title="Input-shape requirements inferred from this function's own ops — rank pins are hard requirements; 'flexible' means leading dims are free here">⛶ {reqLine(fn)}</div>
       {/if}
       {#each fn.lines as l}
-        <div class="ln" class:bad={l.problem} class:changed={isChanged(l)}>
+        <div class="ln" class:bad={l.problem} class:changed={isChanged(l)} class:nonfinite={s.nonFinite?.line === l.line}>
           <span>{l.text}</span><span class="sh">{shapesOf(l)}</span>
         </div>
         {#if l.problem}

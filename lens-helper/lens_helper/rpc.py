@@ -72,6 +72,13 @@ def handle(method: str, params: Dict[str, Any]) -> Any:
             return tracer.paper_module(
                 params["path"], int(params.get("batch", 2)), int(params.get("seq", 16)), params.get("projectRoot", "")
             )  # {path, sections, dims, problems}
+    if method == "compare_traces":  # design B scaffold — faithful-port compare
+        from . import tracer
+
+        with tracer._time_limit(TRACE_TIMEOUT):
+            return tracer.compare_traces(
+                params["pathA"], params["pathB"], params.get("projectRoot", "")
+            )  # {pathA, pathB, matched, onlyA, onlyB, dimsA, dimsB, problems, note}
     if method == "list_folder":
         from . import project
 

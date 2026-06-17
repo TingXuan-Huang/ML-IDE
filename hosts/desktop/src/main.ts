@@ -29,7 +29,7 @@ import {
   type RawTrace,
   type TraceModuleResult,
 } from '@fusion/core';
-import type { AgentConfigWire, CallGraph, Conversation, ConversationMeta, HostMessage, ModuleSummary, PaperView, ProjectGraphWire, TracingConfigWire, WebviewMessage } from '@fusion/shared';
+import type { AgentConfigWire, CallGraph, CompareResult, Conversation, ConversationMeta, HostMessage, ModuleSummary, PaperView, ProjectGraphWire, TracingConfigWire, WebviewMessage } from '@fusion/shared';
 
 // hosts/desktop/dist/main.js -> up three to the repo root.
 const REPO = path.resolve(__dirname, '..', '..', '..');
@@ -290,6 +290,42 @@ async function runTraceFunction(name: string, line: number): Promise<void> {
   }
 }
 
+// design B — faithful-port compare: trace both files as paper sections and diff matched forwards.
+// A = this (open) file, B = the picked reference.
+async function runCompare(pathA: string, pathB: string): Promise<void> {
+  // Clear any stale diff + show "comparing…" while both files trace (can be multi-second).
+  send({ type: 'compareResult', result: { pathA, pathB, matched: [], onlyA: [], onlyB: [], pending: true } });
+  try {
+    const result = await getHelper().request<CompareResult>('compare_traces', {
+      pathA,
+      pathB,
+      projectRoot: workspaceRoot ?? '',
+    });
+    send({ type: 'compareResult', result });
+  } catch (e) {
+    // Route the failure back into the Compare zone (it shows result.error) rather than the
+    // global trace spinner, so the zone never sticks loading.
+    send({ type: 'compareResult', result: { pathA, pathB, matched: [], onlyA: [], onlyB: [], error: String(e) } });
+  }
+}
+
+// Pick a reference .py and compare it against the currently-open file (A). Opens the file
+// dialog (mirrors pickPython); A is always the open file, so the common case is one click.
+async function pickReferenceAndCompare(): Promise<void> {
+  if (!openFile) {
+    await pickPython();
+    if (!openFile) return;
+  }
+  const r = await dialog.showOpenDialog({
+    title: 'Pick a reference implementation to compare against this file',
+    properties: ['openFile'],
+    filters: [{ name: 'Python', extensions: ['py'] }],
+  });
+  if (r.canceled || !r.filePaths[0]) return;
+  send({ type: 'focus', zone: 'compare' });
+  await runCompare(openFile.path, r.filePaths[0]);
+}
+
 async function pickDataFile(): Promise<void> {
   const r = await dialog.showOpenDialog({
     properties: ['openFile'],
@@ -315,7 +351,7 @@ const AGENT_CONFIG_FILE = path.join(os.homedir(), '.fusion', 'agent.json');
 
 // --- tracing config (Tracing settings tab) -------------------------------------
 const TRACING_CONFIG_FILE = path.join(os.homedir(), '.fusion', 'tracing.json');
-const DEFAULT_TRACING: TracingConfigWire = { density: 'changed', abstract: false, autoTrace: false, retries: 3 };
+const DEFAULT_TRACING: TracingConfigWire = { density: 'changed', abstract: false, autoTrace: false, retries: 3, meta: false };
 function loadTracing(): TracingConfigWire {
   try {
     // Drop legacy batch/seq keys from older config files (the synth now uses fixed dims).
@@ -797,6 +833,12 @@ async function onMessage(m: WebviewMessage): Promise<void> {
       if (_paperExplainId) agentRuns.get(_paperExplainId)?.abort();
       _paperExplainId = undefined; // also drops a still-queued run (its id no longer matches)
       break;
+    case 'compareFiles': // design B — faithful-port compare (re-compare a known pair)
+      await runCompare(m.pathA, m.pathB);
+      break;
+    case 'pickCompareFile': // design B — pick a reference, compare against the open file
+      await pickReferenceAndCompare();
+      break;
     case 'traceAssist':
       queueAgent(() => runTraceAssist(m.id, m.path, m.name, m.line)); // serialized (file-level ✦ ask)
       break;
@@ -819,6 +861,7 @@ function buildMenu(): void {
           { label: 'Open Folder…', accelerator: 'CmdOrCtrl+Shift+F', click: () => void pickFolder() },
           { label: 'Open Data File…', accelerator: 'CmdOrCtrl+Shift+O', click: () => void pickDataFile() },
           { label: 'Trace Current File', accelerator: 'CmdOrCtrl+R', click: () => void runTrace() },
+          { label: 'Compare With Reference…', accelerator: 'CmdOrCtrl+Shift+C', click: () => void pickReferenceAndCompare() },
           { type: 'separator' },
           { role: 'close' },
         ],

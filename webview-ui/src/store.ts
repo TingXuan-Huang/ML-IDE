@@ -3,6 +3,7 @@ import type {
   AgentConfigWire,
   CallGraph,
   ChatRecordMessage,
+  CompareResult,
   ConversationMeta,
   DataMeta,
   FileStructure,
@@ -48,6 +49,15 @@ export const cancelPaperExplain = (): void => {
 /** #5 — pick a real data file as this function's input (writes `# fusion: input = load(...)`). */
 export const traceWithRealInput = (path: string, name: string, line: number): void =>
   post({ type: 'traceWithRealInput', path, name, line });
+
+// --- design B: faithful-port compare -------------------------------------------
+// Latest compare result (Compare zone). Nulled on activeFile/openDocument so an edit never leaves
+// a stale diff; lastReference survives so the zone can re-compare the CURRENT file vs that
+// reference (re-compare re-anchors A to the open file — it can't diff a closed one).
+export const compareResult = writable<CompareResult | null>(null);
+export const lastReference = writable<string | null>(null);
+export const compareFiles = (pathA: string, pathB: string): void => post({ type: 'compareFiles', pathA, pathB });
+export const pickCompareFile = (): void => post({ type: 'pickCompareFile' });
 
 // --- standalone editor (desktop host only) -------------------------------------
 // True when running inside the Electron host (preload exposed window.fusionHost).
@@ -168,6 +178,33 @@ export const tracingConfig = writable<TracingConfigWire | null>(null);
 export const density = derived(tracingConfig, ($t) => $t?.density ?? 'changed');
 // Abstract view: relabel concrete dims with symbols (B/L/D) — read by Blocks + the editor.
 export const abstract = derived(tracingConfig, ($t) => $t?.abstract ?? false);
+// Tensor Inspector: show per-tensor dtype · device · grad · memory inline. Off by default.
+export const showMeta = derived(tracingConfig, ($t) => $t?.meta ?? false);
+
+/** Compact human bytes: 64B · 512KB · 48MB · 1.2GB. */
+function humanBytes(n: number): string {
+  if (!n) return '';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < u.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v >= 100 || i === 0 ? Math.round(v) : Math.round(v * 10) / 10}${u[i]}`;
+}
+
+/** The rest of what `print(x.shape, x.dtype, x.device)` carries, as a compact inline suffix:
+ *  "float32 · cuda:0 · 48MB". The boring default (cpu) is dropped so the accelerator + memory
+ *  signals stand out. Shown only when the Tensor Inspector toggle is on. */
+export function fmtMeta(x: { dtype?: string; device?: string; bytes?: number }): string {
+  const parts: string[] = [];
+  if (x.dtype) parts.push(x.dtype);
+  if (x.device && x.device !== 'cpu') parts.push(x.device); // cpu is the default — only flag accelerators
+  const b = x.bytes ? humanBytes(x.bytes) : '';
+  if (b) parts.push(b);
+  return parts.join(' · ');
+}
 
 /** Relabel a concrete shape with symbols when abstract mode is on, e.g. [2,16,128] -> "B, L, D".
  *  Dims with no known symbol stay numeric. `on=false` just joins the numbers. */
@@ -254,11 +291,13 @@ export function applyHostMessage(m: HostMessage): void {
       modelSummary.set(null);
       paper.set(null);
       paperExplain.set(null);
+      compareResult.set(null); // clear a possibly-stale diff (lastComparePair survives -> re-compare)
       break;
     case 'openDocument':
       doc.set({ path: m.path, text: m.text, language: m.language });
       paper.set(null); // new file -> drop the previous paper view + its explanation
       paperExplain.set(null);
+      compareResult.set(null); // new active file -> the prior diff's A no longer matches
       break;
     case 'agentMemory':
       memory.set(m.text);
@@ -351,6 +390,11 @@ export function applyHostMessage(m: HostMessage): void {
     case 'conversation':
       conversationId.set(m.conversation.id);
       chat.set(m.conversation.messages.map((r) => ({ role: r.role, text: r.text, error: r.error, directive: r.directive })));
+      break;
+    case 'compareResult':
+      compareResult.set(m.result);
+      // Remember the reference only on a real (non-error, non-pending) result.
+      if (m.result.pathB && !m.result.error && !m.result.pending) lastReference.set(m.result.pathB);
       break;
   }
 }

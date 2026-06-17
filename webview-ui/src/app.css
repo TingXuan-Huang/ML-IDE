@@ -45,6 +45,12 @@ body {
 .ln.bad .sh, .prob { color: var(--vscode-errorForeground); }
 .prob { padding: 1px 8px 3px 10px; font-style: italic; }
 .op { padding: 1px 8px 2px 10px; color: var(--vscode-charts-blue, #4daafc); font-size: 11px; opacity: 0.9; font-style: italic; }
+/* NaN/Inf sentinel (Tensor Inspector): a banner + the offending line highlighted. */
+.nanbar { margin: 4px 8px; padding: 4px 9px; border-radius: 4px; font-size: 11px;
+  color: var(--vscode-errorForeground); background: var(--vscode-inputValidation-errorBackground);
+  border: 1px solid var(--vscode-errorForeground); }
+.ln.nonfinite { background: var(--vscode-inputValidation-errorBackground); }
+.ln.nonfinite .sh { color: var(--vscode-errorForeground); }
 
 .gsparse { padding: 4px 8px; color: var(--vscode-descriptionForeground); font-size: 11px; }
 .gnode { cursor: pointer; }
@@ -220,3 +226,30 @@ body {
   color: var(--vscode-errorForeground); }
 .paper-prose-body { padding: 8px; white-space: pre-wrap; line-height: 1.5; }
 .paper-prose.err .paper-prose-body { color: var(--vscode-errorForeground); }
+
+/* design B — faithful-port compare (Compare zone). Reuses .paper / .paper-sec / .paper-h. */
+.cmpbar { display: flex; align-items: center; gap: 8px; padding: 4px 10px;
+  border-bottom: 1px solid var(--vscode-panel-border); font-size: 11px; }
+.cmpbar .spacer { flex: 1; }
+.cmpbar .sub { color: var(--vscode-descriptionForeground); }
+.cmpbar button.ghost { cursor: pointer; padding: 2px 10px; font-size: 11px; background: transparent;
+  color: var(--vscode-foreground); border: 1px solid var(--vscode-panel-border); border-radius: 4px; }
+.cmpbar button.ghost:hover { border-color: var(--vscode-focusBorder); }
+.cmp-caret { display: inline-block; width: 12px; color: var(--vscode-descriptionForeground); }
+.cmp-chip { margin-left: 8px; padding: 0 6px; border-radius: 8px; font-size: 10px; font-weight: 600; }
+.cmp-chip.ok { color: var(--vscode-charts-green, #89d185); }
+.cmp-chip.bad, .cmp-chip.crash { color: var(--vscode-errorForeground); }
+.cmp-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 1px 8px 1px 16px;
+  font-size: 12px; color: var(--vscode-foreground); }
+.cmp-row.diverge { background: var(--vscode-inputValidation-errorBackground); }
+.cmp-row.first { box-shadow: inset 3px 0 0 var(--vscode-errorForeground); }
+.cmp-row .cmp-a, .cmp-row .cmp-b { min-width: 0; word-break: break-word; }
+.cmp-row .cmp-a.click { cursor: pointer; }
+.cmp-row .cmp-a.click:hover { color: var(--vscode-textLink-activeForeground); }
+.cmp-row .cmp-shape { margin-left: 8px; color: var(--vscode-charts-blue, #4daafc); font-style: italic; }
+.cmp-row.diverge .cmp-shape { color: var(--vscode-errorForeground); }
+.cmp-first { grid-column: 1 / -1; font-size: 10px; font-weight: 600; color: var(--vscode-errorForeground); }
+.cmp-only { padding: 3px 10px; color: var(--vscode-descriptionForeground); font-size: 11px; font-style: italic; }
+.cmp-note { margin: 6px 10px; padding-top: 6px; border-top: 1px solid var(--vscode-panel-border);
+  color: var(--vscode-descriptionForeground); font-size: 11px; font-style: italic; }
+.empty .link { cursor: pointer; color: var(--vscode-textLink-foreground); text-decoration: underline; }

@@ -55,7 +55,7 @@
   }
 
   // --- tracing ---
-  const DEFAULT_TRACING: TracingConfigWire = { density: 'changed', abstract: false, autoTrace: false, retries: 3 };
+  const DEFAULT_TRACING: TracingConfigWire = { density: 'changed', abstract: false, autoTrace: false, retries: 3, meta: false };
   let tc: TracingConfigWire = $tracingConfig ? { ...$tracingConfig } : { ...DEFAULT_TRACING };
   function saveTracing(): void {
     saveTracingConfig({ ...tc, retries: Math.max(1, Number(tc.retries) || 1) });
@@ -157,6 +157,8 @@
       </label>
       <label class="check"><input type="checkbox" bind:checked={tc.abstract} /> <span>Abstract shapes — relabel dims as symbols (B, L, D)</span></label>
       <p class="help">Reads dimensions back as <code>B</code>(atch) / <code>L</code>(ength) / <code>D</code>(model) / <code>C,H,W</code> from the traced input, e.g. <code>qkv[B, L, 3, 4, 32]</code>. Off = concrete numbers.</p>
+      <label class="check"><input type="checkbox" bind:checked={tc.meta} /> <span>Tensor inspector — show dtype · device · memory inline</span></label>
+      <p class="help">Appends the rest of <code>print(x.shape, x.dtype, x.device)</code>, e.g. <code>h[B, L, D] float32 · cuda:0 · 48MB</code>. <code>cpu</code> is hidden to stay quiet.</p>
       <label class="check"><input type="checkbox" bind:checked={tc.autoTrace} /> <span>Auto-trace a file as soon as it’s opened</span></label>
       <label>✦ ask retries <span class="sub">— agent↔tracer rounds</span><input type="number" min="1" max="6" bind:value={tc.retries} /></label>
       <div class="row">

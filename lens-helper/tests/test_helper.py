@@ -960,3 +960,340 @@ def test_directive_input_in_trace_module(tmp_path):
     assert res["problems"] == [], res["problems"]
     assert any("randint(0, 50, (3, 7))" in n["note"] for n in res["notes"])
     assert any(any(v["shape"] == [3, 7, 8] for v in rec.values()) for rec in res["records"].values())
+
+
+# --- Tensor Inspector (design A): dtype · device · memory + NaN/Inf sentinel ----
+def test_trace_captures_device_and_bytes(tmp_path):
+    import math
+    f = _write(
+        tmp_path,
+        "meta.py",
+        "import torch, torch.nn as nn\n"
+        "class N(nn.Module):\n"
+        "    def __init__(s):\n"
+        "        super().__init__(); s.fc = nn.Linear(4, 8)\n"
+        "    def forward(s, x):\n"
+        "        h = s.fc(x)\n"
+        "        return h\n",
+    )
+    res = tracer.trace_function(f, "forward", 0)
+    assert res["error"] is None, res["error"]
+    hit = None
+    for rec in res["records"].values():
+        for v in rec.values():
+            if v["shape"] and v["shape"][-1] == 8:
+                hit = v
+    assert hit is not None, res["records"]
+    assert hit["dtype"] == "float32"
+    assert hit["device"] == "cpu"  # numpy/cpu default; accelerators would read "cuda:0" etc.
+    assert hit["bytes"] == math.prod(hit["shape"]) * 4  # float32 = 4 bytes/element
+
+
+def test_nonfinite_sentinel_flags_nan(tmp_path):
+    f = _write(
+        tmp_path,
+        "nan.py",
+        "import torch, torch.nn as nn\n"
+        "class N(nn.Module):\n"
+        "    # fusion: input = torch.tensor([0.0, 1.0, 2.0])\n"
+        "    def forward(s, x):\n"
+        "        y = x / x\n"   # 0/0 -> NaN at index 0
+        "        return y\n",
+    )
+    res = tracer.trace_function(f, "forward", 0)
+    nf = res["nonFinite"]
+    assert nf is not None, res
+    assert nf["kind"] == "nan"
+    assert nf["var"] == "y"
+
+
+def test_nonfinite_sentinel_in_trace_module(tmp_path):
+    # The first NaN tensor is the RETURN value (0/0) -> sentinel fires via the return path.
+    f = _write(
+        tmp_path,
+        "nanmod.py",
+        "import torch, torch.nn as nn\n"
+        "class N(nn.Module):\n"
+        "    # fusion: input = torch.zeros(4)\n"
+        "    def forward(s, x):\n"
+        "        return x / x\n",   # 0/0 -> NaN
+    )
+    res = tracer.trace_module(f)
+    nf = res["nonFinite"]
+    assert nf is not None, res
+    assert nf["kind"] == "nan"
+
+
+def test_inf_is_not_flagged_as_nan(tmp_path):
+    # -inf (an attention-mask constant or log(0)) must NOT trip the sentinel — only NaN does.
+    f = _write(
+        tmp_path,
+        "infonly.py",
+        "import torch, torch.nn as nn\n"
+        "class N(nn.Module):\n"
+        "    # fusion: input = torch.zeros(4)\n"
+        "    def forward(s, x):\n"
+        "        return torch.log(x)\n",   # log(0) -> -inf, intentional-looking; not a NaN
+    )
+    assert tracer.trace_module(f)["nonFinite"] is None
+
+
+def test_clean_trace_has_no_nonfinite(tmp_path):
+    f = _write(
+        tmp_path,
+        "clean.py",
+        "import torch, torch.nn as nn\n"
+        "class N(nn.Module):\n"
+        "    def __init__(s):\n"
+        "        super().__init__(); s.fc = nn.Linear(4, 8)\n"
+        "    def forward(s, x):\n"
+        "        return s.fc(x)\n",
+    )
+    assert tracer.trace_module(f)["nonFinite"] is None
+    assert tracer.trace_function(f, "forward", 0)["nonFinite"] is None
+
+
+# --- faithful-port compare (design B scaffold) ----------------------------------
+_BLOCK = (
+    "import torch, torch.nn as nn\n"
+    "class Block(nn.Module):\n"
+    "    def __init__(s):\n"
+    "        super().__init__(); s.fc = nn.Linear(4, {out})\n"
+    "    def forward(s, x):\n"
+    "        h = s.fc(x)\n"
+    "        return h\n"
+)
+
+
+def test_compare_traces_flags_divergence(tmp_path):
+    a = _write(tmp_path, "ref.py", _BLOCK.format(out=8))
+    b = _write(tmp_path, "mine.py", _BLOCK.format(out=16))  # different out dim -> diverges
+    res = tracer.compare_traces(a, b)
+    assert [m["module"] for m in res["matched"]] == ["Block.forward"]
+    assert res["matched"][0]["diverges"] is True
+    assert res["onlyA"] == [] and res["onlyB"] == []
+
+
+def test_compare_traces_identical_no_divergence(tmp_path):
+    a = _write(tmp_path, "same.py", _BLOCK.format(out=8))
+    res = tracer.compare_traces(a, a)
+    assert res["matched"] and res["matched"][0]["diverges"] is False
+
+
+def test_build_nan_does_not_mask_forward(tmp_path):
+    # A NaN local during __init__ must NOT pre-empt the forward-pass NaN. The sentinel only
+    # watches forward/function calls (build-time garbage like torch.empty() is nondeterministic).
+    f = _write(
+        tmp_path,
+        "buildnan.py",
+        "import torch, torch.nn as nn\n"
+        "class N(nn.Module):\n"
+        "    def __init__(s):\n"
+        "        super().__init__()\n"
+        "        s.fc = nn.Linear(4, 4)\n"
+        "        junk = torch.tensor([float('nan')])\n"  # NaN local during build — must be ignored
+        "        s.n = junk.sum()\n"
+        "    # fusion: input = torch.zeros(4)\n"
+        "    def forward(s, x):\n"
+        "        return x / x\n",  # 0/0 -> NaN in forward
+    )
+    nf = tracer.trace_module(f)["nonFinite"]
+    assert nf is not None, "forward NaN should be flagged"
+    assert nf["var"] == "return"  # the forward NaN, not the build-time `junk`
+
+
+# --- faithful-port compare: op-aware LCS diff (design B full build) ---------------
+def test_compare_emits_aligned_rows_with_source(tmp_path):
+    a = _write(tmp_path, "ref.py", _BLOCK.format(out=8))
+    b = _write(tmp_path, "mine.py", _BLOCK.format(out=16))  # different out dim everywhere
+    res = tracer.compare_traces(a, b)
+    m = res["matched"][0]
+    assert m["module"] == "Block.forward"
+    assert isinstance(m["rows"], list) and m["rows"], m
+    assert m["diverges"] is True
+    assert m["divergeStep"] == 0
+    # rows carry the source line so the UI can show the actual code
+    a_texts = [row["a"]["text"] for row in m["rows"] if row.get("a")]
+    assert any("s.fc(x)" in t for t in a_texts), a_texts
+
+
+def test_compare_crashed_forward_folds_into_matched(tmp_path):
+    a = _write(tmp_path, "ok.py", _BLOCK.format(out=8))
+    b = _write(
+        tmp_path,
+        "broken.py",
+        "import torch, torch.nn as nn\n"
+        "class Block(nn.Module):\n"
+        "    def __init__(s):\n"
+        "        super().__init__(); s.a = nn.Linear(4, 8); s.b = nn.Linear(16, 2)\n"
+        "    def forward(s, x):\n"
+        "        h = s.a(x)\n"
+        "        return s.b(h)\n",  # 8 vs 16 -> RuntimeError in B's forward
+    )
+    res = tracer.compare_traces(a, b)
+    m = next(mm for mm in res["matched"] if mm["module"] == "Block.forward")
+    assert m["diverges"] is True
+    assert m["matchNote"] == "not traceable in B (reference)"
+    assert any((row.get("b") or {}).get("crashed") for row in m["rows"])
+    # the crashed forward must NOT look "absent"
+    assert "Block.forward" not in res["onlyB"] and "Block.forward" not in res["onlyA"]
+
+
+def test_compare_renamed_classes_listed_separately(tmp_path):
+    # No silent rename-pairing: differently-named classes show as only-in-A / only-in-B (the
+    # confident mis-pair failure mode is gone; agent rename-matching is the documented next step).
+    a = _write(tmp_path, "ref.py", _BLOCK.format(out=8).replace("class Block", "class Attn"))
+    b = _write(tmp_path, "mine.py", _BLOCK.format(out=8).replace("class Block", "class MHSA"))
+    res = tracer.compare_traces(a, b)
+    assert res["matched"] == []
+    assert res["onlyA"] == ["Attn.forward"]
+    assert res["onlyB"] == ["MHSA.forward"]
+
+
+def test_compare_flags_op_difference_at_equal_shapes(tmp_path):
+    # The reviewer's killer case: a shape-preserving op difference (a matmul present in A, absent
+    # in B) must NOT read as "matches", even though every shape is identical [*,4].
+    head = (
+        "import torch, torch.nn as nn\n"
+        "class M(nn.Module):\n"
+        "    def __init__(s):\n"
+        "        super().__init__(); s.fc = nn.Linear(4, 4); s.w = nn.Parameter(torch.randn(4, 4))\n"
+        "    def forward(s, x):\n"
+        "        h = s.fc(x)\n"
+    )
+    a = _write(tmp_path, "mm.py", head + "        y = h @ s.w\n        return y\n")  # matmul
+    b = _write(tmp_path, "plain.py", head + "        y = h\n        return y\n")  # no op
+    res = tracer.compare_traces(a, b)
+    assert res["matched"][0]["diverges"] is True  # op-kind 'matmul' vs '' -> a gap
+
+
+def test_compare_batch_size_is_not_a_divergence(tmp_path):
+    # Same forward traced with different BATCH sizes must NOT diverge (batch is never a port bug).
+    head = (
+        "import torch, torch.nn as nn\n"
+        "class Block(nn.Module):\n"
+        "    def __init__(s):\n"
+        "        super().__init__(); s.fc = nn.Linear(4, 8)\n"
+        "    # fusion: input = torch.randn({n}, 4)\n"
+        "    def forward(s, x):\n"
+        "        h = s.fc(x)\n"
+        "        return h\n"
+    )
+    a = _write(tmp_path, "b2.py", head.format(n=2))
+    b = _write(tmp_path, "b5.py", head.format(n=5))
+    res = tracer.compare_traces(a, b)
+    assert res["matched"][0]["diverges"] is False  # 2 vs 5 batch -> same after wildcard
+
+
+def test_compare_inserted_noop_is_single_gap_not_cascade(tmp_path):
+    # An extra shape-preserving line in B must produce exactly ONE diverging row, not a cascade.
+    a = _write(tmp_path, "a.py", _BLOCK.format(out=8))
+    b = _write(
+        tmp_path,
+        "b.py",
+        "import torch, torch.nn as nn\n"
+        "class Block(nn.Module):\n"
+        "    def __init__(s):\n"
+        "        super().__init__(); s.fc = nn.Linear(4, 8)\n"
+        "    def forward(s, x):\n"
+        "        h = s.fc(x)\n"
+        "        h2 = h + h\n"  # extra shape-preserving op
+        "        return h2\n",
+    )
+    res = tracer.compare_traces(a, b)
+    m = res["matched"][0]
+    assert m["diverges"] is True
+    assert sum(1 for row in m["rows"] if row["diverge"]) == 1  # one gap, no cascade
+
+
+def test_paper_module_records_skipped_untraceable_forward(tmp_path):
+    f = _write(
+        tmp_path,
+        "multi.py",
+        "import torch, torch.nn as nn\n"
+        "class Mix(nn.Module):\n"
+        "    def forward(s, x, mask):\n"  # multi-arg, no directive -> can't auto-invoke
+        "        return x\n",
+    )
+    res = tracer.paper_module(f)
+    assert any(s.get("module") == "Mix.forward" for s in res.get("skipped", []))
+
+
+def test_compare_untraceable_module_not_phantom_missing(tmp_path):
+    # Mix exists in BOTH files but B's forward is multi-arg (untraceable) -> folds into matched as
+    # 'not traceable', NOT a phantom 'only in this file'.
+    a = _write(
+        tmp_path,
+        "a.py",
+        "import torch, torch.nn as nn\n"
+        "class Mix(nn.Module):\n"
+        "    def __init__(s):\n"
+        "        super().__init__(); s.fc = nn.Linear(4, 4)\n"
+        "    def forward(s, x):\n"
+        "        return s.fc(x)\n",
+    )
+    b = _write(
+        tmp_path,
+        "b.py",
+        "import torch, torch.nn as nn\n"
+        "class Mix(nn.Module):\n"
+        "    def forward(s, x, mask):\n"  # untraceable
+        "        return x\n",
+    )
+    res = tracer.compare_traces(a, b)
+    assert "Mix.forward" not in res["onlyA"]
+    m = next((mm for mm in res["matched"] if mm["module"] == "Mix.forward"), None)
+    assert m is not None and m["matchNote"] == "not traceable in B (reference)"
+
+
+def test_compare_length_mismatch_diverges(tmp_path):
+    a = _write(tmp_path, "short.py", _BLOCK.format(out=8))
+    b = _write(
+        tmp_path,
+        "long.py",
+        "import torch, torch.nn as nn\n"
+        "class Block(nn.Module):\n"
+        "    def __init__(s):\n"
+        "        super().__init__(); s.fc = nn.Linear(4, 8)\n"
+        "    def forward(s, x):\n"
+        "        h = s.fc(x)\n"
+        "        g = h * 2\n"  # extra step
+        "        return g\n",
+    )
+    res = tracer.compare_traces(a, b)
+    m = res["matched"][0]
+    assert m["diverges"] is True
+    assert m["divergeStep"] is not None
+
+
+def test_paper_problem_carries_module_field(tmp_path):
+    f = _write(
+        tmp_path,
+        "bad.py",
+        "import torch, torch.nn as nn\n"
+        "class Block(nn.Module):\n"
+        "    def __init__(s):\n"
+        "        super().__init__(); s.a = nn.Linear(4, 8); s.b = nn.Linear(16, 2)\n"
+        "    def forward(s, x):\n"
+        "        return s.b(s.a(x))\n",  # crash
+    )
+    res = tracer.paper_module(f)
+    assert res["problems"], "expected a crash problem"
+    assert any(p.get("module") == "Block.forward" for p in res["problems"])
+
+
+def test_compare_flags_op_difference_in_a_chain(tmp_path):
+    # A multi-op line that differs only PAST the leading op (same permute, then softmax vs nothing)
+    # must still flag — op-kind is the whole op sequence on the line, not just the leader.
+    head = (
+        "import torch, torch.nn as nn\n"
+        "class M(nn.Module):\n"
+        "    def __init__(s):\n"
+        "        super().__init__(); s.fc = nn.Linear(4, 4)\n"
+        "    def forward(s, x):\n"
+        "        h = s.fc(x)\n"
+    )
+    a = _write(tmp_path, "chain_a.py", head + "        y = h.permute(1, 0).softmax(dim=-1)\n        return y\n")
+    b = _write(tmp_path, "chain_b.py", head + "        y = h.permute(1, 0)\n        return y\n")
+    res = tracer.compare_traces(a, b)
+    assert res["matched"][0]["diverges"] is True, res["matched"][0]
