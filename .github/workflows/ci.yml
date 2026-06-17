@@ -18,6 +18,7 @@ jobs:
       - run: npm ci
       - run: npm run build:core
       - run: npm run test:ui # vitest over @fusion/core
+      - run: npm run test:webview # vitest over the webview store/formatters
       - run: npm run build:host -w @fusion/desktop # desktop host tsc
       - run: npm run compile:ext -w fusion-cockpit # VS Code extension tsc
       - run: npm run build:ui # webview (Svelte / Vite) build
