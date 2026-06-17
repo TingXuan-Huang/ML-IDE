@@ -20,5 +20,8 @@
     "test:ui": "npm run test -w @fusion/core",
     "test:webview": "npm run test -w fusion-webview-ui",
     "test:py": "cd lens-helper && python -m pytest tests/ -q"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
